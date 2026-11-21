@@ -73,6 +73,69 @@ test('gitparse: decoraciones y registro', () => {
   assert.equal(c[1].parents.length, 0);
 });
 
+test('gitparse: del registro de una rama remota solo salen los push (no los fetch ni los borrados)', () => {
+  const zero = '0'.repeat(40);
+  const a = 'a'.repeat(40);
+  const b = 'b'.repeat(40);
+  const text = [
+    zero + ' ' + a + ' Ana <ana@example.com> 1700000000 +0100\tupdate by push',
+    a + ' ' + b + ' Ana <ana@example.com> 1700000100 +0100\tfetch origin: fast-forward',
+    a + ' ' + b + ' Luis Pérez <luis@example.com> 1700000200 +0000\tupdate by push',
+    b + ' ' + zero + ' Ana <ana@example.com> 1700000300 +0000\tupdate by push',
+    'basura',
+  ].join('\n') + '\n';
+  const r = GP.parsePushLog(text, 'origin/main');
+  assert.deepEqual(r, [
+    { ref: 'origin/main', old: zero, new: a, who: 'Ana', ts: 1700000000 },
+    { ref: 'origin/main', old: a, new: b, who: 'Luis Pérez', ts: 1700000200 },
+  ]);
+  assert.deepEqual(GP.parsePushLog('', 'x'), []);
+});
+
+test('graph: cada push se marca en el commit donde acabó y recuerda qué commits subió', () => {
+  const commits = [
+    { sha: 'c3', parents: ['c2'], subject: 'tercero', refs: [{ type: 'branch', name: 'main', head: true }] },
+    { sha: 'c2', parents: ['c1'], subject: 'segundo', refs: [] },
+    { sha: 'c1', parents: ['c0'], subject: 'primero', refs: [] },
+    { sha: 'c0', parents: [], subject: 'inicio', refs: [] },
+  ];
+  const g = G.buildGraph(commits, {
+    currentBranch: 'main', headSha: 'c3',
+    pushes: [
+      { ref: 'origin/main', old: 'c1', new: 'c3', ts: 1700000200, who: 'Ana' }, // subió c3 y c2
+      { ref: 'origin/main', old: '0000', new: 'c1', ts: 1700000000, who: 'Ana' }, // primer push de main: todo lo que había
+      { ref: 'origin/main', old: 'c0', new: 'ffff', ts: 1699999999, who: 'Ana' }, // ese commit ya no está: se ignora
+    ],
+  });
+  assert.equal(g.pushMarks.length, 2);
+  const m3 = g.pushMarks.find((m) => m.sha === 'c3');
+  const by = Object.fromEntries(g.nodes.map((n) => [n.sha, n]));
+  assert.equal(m3.x, by.c3.x);
+  assert.equal(m3.items.length, 1);
+  assert.deepEqual(m3.items[0].commits.map((c) => c.subject), ['tercero', 'segundo']);
+  assert.equal(m3.items[0].count, 2);
+  assert.equal(m3.items[0].isNew, false);
+  const m1 = g.pushMarks.find((m) => m.sha === 'c1');
+  assert.equal(m1.items[0].isNew, true);
+  assert.deepEqual(m1.items[0].commits.map((c) => c.subject), ['primero', 'inicio']);
+  // dos push que acaban en el mismo commit comparten marca, el más reciente primero
+  const dos = G.buildGraph(commits, {
+    currentBranch: 'main', headSha: 'c3',
+    pushes: [{ ref: 'origin/main', old: 'c1', new: 'c3', ts: 10, who: 'A' }, { ref: 'copia/main', old: 'c1', new: 'c3', ts: 20, who: 'A' }],
+  });
+  assert.equal(dos.pushMarks.length, 1);
+  assert.deepEqual(dos.pushMarks[0].items.map((i) => i.ref), ['copia/main', 'origin/main']);
+  // el punto de partida queda fuera de lo dibujado: se avisa de que es parcial
+  const fuera = G.buildGraph(commits, { currentBranch: 'main', headSha: 'c3', pushes: [{ ref: 'origin/main', old: 'zz99', new: 'c3', ts: 5, who: 'A' }] });
+  assert.equal(fuera.pushMarks[0].items[0].partial, true);
+  // un push de una rama nueva solo cuenta lo que tiene de más que la principal
+  const conRama = G.buildGraph([
+    { sha: 'd1', parents: ['m1'], subject: 'en dev', refs: [{ type: 'branch', name: 'dev' }] },
+    { sha: 'm1', parents: [], subject: 'inicio', refs: [{ type: 'branch', name: 'main', head: true }] },
+  ], { currentBranch: 'main', headSha: 'm1', pushes: [{ ref: 'origin/dev', old: '0000', new: 'd1', ts: 7, who: 'A' }] });
+  assert.deepEqual(conRama.pushMarks[0].items[0].commits.map((c) => c.subject), ['en dev']);
+});
+
 test('gitparse: parseGithubUrl sigue disponible', () => {
   assert.equal(GP.parseGithubUrl('https://github.com/a/b.git').repo, 'b');
 });
@@ -129,6 +192,74 @@ test('graph: main es una línea larga que sigue de largo mientras otra rama avan
     { sha: 'b1', parents: [], subject: 'y', refs: [{ type: 'branch', name: 'alfa' }] },
   ], {});
   assert.equal(solo.rail, null);
+});
+
+test('graph: cada rama tiene su línea larga y su color, también la que no tiene commits propios (develop)', () => {
+  const commits = [
+    { sha: 'f2', parents: ['f1'], subject: 'feature 2', refs: [{ type: 'branch', name: 'feature', head: true }] },
+    { sha: 'f1', parents: ['m2'], subject: 'feature 1', refs: [] },
+    { sha: 'm2', parents: ['m1'], subject: 'main 2', refs: [{ type: 'branch', name: 'main' }, { type: 'branch', name: 'develop' }, { type: 'remote', name: 'origin/develop' }] },
+    { sha: 'm1', parents: [], subject: 'inicio', refs: [] },
+  ];
+  const g = G.buildGraph(commits, { currentBranch: 'feature', headSha: 'f2' });
+  assert.equal(g.rail.name, 'main');
+  const byName = Object.fromEntries(g.rails.map((r) => [r.name, r]));
+  assert.deepEqual(Object.keys(byName).sort(), ['develop', 'feature'], 'develop (sin commits propios) y feature tienen línea; main tiene la suya aparte');
+  assert.equal(byName.develop.virtual, true);
+  assert.equal(byName.feature.virtual, false);
+  assert.notEqual(byName.develop.lane, byName.feature.lane, 'cada rama en su carril');
+  assert.ok(byName.develop.lane > 0 && byName.feature.lane > 0);
+  const m2 = g.nodes.find((n) => n.sha === 'm2');
+  assert.equal(byName.develop.anchor.x, m2.x, 'develop sale del commit al que apunta');
+  assert.ok(byName.develop.tipX > m2.x);
+  // colores: todos distintos y las etiquetas usan el color de su rama
+  const idx = [0, byName.develop.colorIdx, byName.feature.colorIdx];
+  assert.equal(new Set(idx.map((i) => G.colorFor(i))).size, 3);
+  assert.equal(g.branchColors.develop, byName.develop.colorIdx);
+  assert.equal(g.branchColors.feature, byName.feature.colorIdx);
+  assert.equal(g.branchColors.main, 0);
+});
+
+test('graph: una rama ya fusionada en su madre se ve abierta, con su recorrido y cerrada (sin línea larga); la que sigue abierta, sí', () => {
+  const commits = [
+    { sha: 'm3', parents: ['m2', 'd2'], subject: 'fusión de dev', refs: [{ type: 'branch', name: 'main', head: true }] },
+    { sha: 'x2', parents: ['x1'], subject: 'nueva 2', refs: [{ type: 'branch', name: 'nueva' }] },
+    { sha: 'x1', parents: ['m2'], subject: 'nueva 1', refs: [] },
+    { sha: 'd2', parents: ['d1'], subject: 'dev 2', refs: [{ type: 'branch', name: 'dev' }] },
+    { sha: 'd1', parents: ['m1'], subject: 'dev 1', refs: [] },
+    { sha: 'm2', parents: ['m1'], subject: 'main 2', refs: [] },
+    { sha: 'm1', parents: [], subject: 'inicio', refs: [] },
+  ];
+  const g = G.buildGraph(commits, { currentBranch: 'main', headSha: 'm3' });
+  const names = g.rails.map((r) => r.name);
+  assert.ok(!names.includes('dev'), 'dev ya está fusionada en main: sin línea larga');
+  assert.ok(names.includes('nueva'), 'nueva sigue abierta: con línea larga');
+  assert.equal(g.segments.find((s) => s.name === 'dev').merged, true);
+  assert.equal(g.segments.find((s) => s.name === 'nueva').merged, false);
+  // sigue estando representada: sus commits en su carril, el cruce de salida y el de fusión
+  const by = Object.fromEntries(g.nodes.map((n) => [n.sha, n]));
+  assert.ok(by.d1.lane > 0 && by.d1.lane === by.d2.lane);
+  assert.ok(g.edges.some((e) => e.kind === 'fork' && e.from === 'm1' && e.to === 'd1'), 'sale de main');
+  assert.ok(g.edges.some((e) => e.kind === 'merge' && e.from === 'd2' && e.to === 'm3'), 'y se cierra con la fusión');
+  // una rama sin commits propios (develop recién creada) sigue abierta aunque main haya avanzado
+  const solo = G.buildGraph([
+    { sha: 'm2', parents: ['m1'], subject: 'main 2', refs: [{ type: 'branch', name: 'main', head: true }] },
+    { sha: 'm1', parents: [], subject: 'inicio', refs: [{ type: 'branch', name: 'develop' }] },
+  ], { currentBranch: 'main', headSha: 'm2' });
+  assert.deepEqual(solo.rails.map((r) => r.name), ['develop']);
+});
+
+test('graph: con muchas ramas (más que colores en la paleta) todas siguen teniendo un color distinto', () => {
+  const commits = [];
+  for (let i = 1; i <= 14; i++) commits.push({ sha: 'b' + i, parents: ['m1'], subject: 'rama ' + i, refs: [{ type: 'branch', name: 'rama' + String(i).padStart(2, '0') }] });
+  commits.push({ sha: 'm1', parents: [], subject: 'inicio', refs: [{ type: 'branch', name: 'main', head: true }] });
+  const g = G.buildGraph(commits, { currentBranch: 'main', headSha: 'm1' });
+  assert.equal(g.rails.length, 14);
+  const colors = g.rails.map((r) => G.colorFor(r.colorIdx));
+  colors.push(G.colorFor(0));
+  assert.equal(new Set(colors).size, 15, 'ningún color repetido');
+  assert.equal(new Set(g.rails.map((r) => r.lane)).size, 14, 'un carril para cada rama');
+  assert.ok(g.height > g.top + 13 * G.LANE_H);
 });
 
 // ---------- lista de órdenes ----------

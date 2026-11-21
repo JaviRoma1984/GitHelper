@@ -23,10 +23,16 @@
   const NODE_R = 9;
   const CHIP_H = 19;
   const CHIP_STEP = 22;
-  const MAX_CHIPS = 4;
+  const MAX_CHIPS = 6; // etiquetas apiladas sobre un mismo punto (rama, su copia en GitHub, develop, etiqueta de versión, HEAD…)
   const MAX_CHIP_CHARS = 13;
   const PALETTE = ['#58a6ff', '#f0883e', '#bc8cff', '#3fb950', '#ff7b72', '#e3b341', '#56d4dd', '#f778ba'];
   const TRUNK_NAMES = ['main', 'master', 'trunk', 'develop'];
+
+  /** Color de la rama número i: los de la paleta y, si hay más ramas que colores, otros generados con el «ángulo áureo» (siempre distintos). */
+  function colorFor(i) {
+    if (i < PALETTE.length) return PALETTE[i];
+    return 'hsl(' + Math.round(((i * 137.508) + 20) % 360) + ' 68% 64%)';
+  }
 
   const short = (name) => (name.length > MAX_CHIP_CHARS ? name.slice(0, MAX_CHIP_CHARS - 1) + '…' : name);
 
@@ -89,7 +95,7 @@
     const byAge = (a, b) => a.col - b.col || a.name.localeCompare(b.name);
     const order = [];
     order.push(trunk ? { name: trunk.name, sha: trunk.sha } : { name: null, sha: commits[0].sha });
-    localTips.filter((t) => t !== trunk).sort(byAge).forEach((t) => order.push({ name: t.name, sha: t.sha }));
+    localTips.filter((t) => t !== trunk).sort(byAge).forEach((t) => order.push({ name: t.name, sha: t.sha, local: true }));
     remoteTips.sort(byAge).forEach((t) => order.push({ name: t.name, sha: t.sha }));
     if (detached) order.push({ name: 'HEAD', sha: detached.sha });
 
@@ -109,12 +115,48 @@
       segs.push(seg);
       return seg;
     };
-    order.forEach((t) => walk(t.sha, t.name));
+    // Cada rama (distinta de main) es una línea larga como la de main. Si la rama tiene commits propios, es su tramo; si apunta a un commit
+    // que ya pertenece a otra rama (p. ej. «develop» recién creada desde main, sin commits nuevos), tendría que quedarse sin línea: por eso
+    // se le crea un tramo «virtual» anclado a ese commit, con su propio carril.
+    const virtualSegs = [];
+    order.forEach((t, i) => {
+      const seg = walk(t.sha, t.name);
+      if (!t.local || i === 0) return;
+      if (seg) seg.isBranch = true; // rama con commits propios (si sigue abierta, más abajo se le pone la línea larga)
+      else if (info.has(t.sha)) virtualSegs.push({ name: t.name, anchorSha: t.sha, virtual: true, nodes: [], lane: 0, colorIdx: 0, start: 0, end: 0 });
+    });
     // Commits a los que solo se llega por una fusión (ramas ya borradas).
     commits.forEach((c) => {
       if (!info.get(c.sha).seg) walk(c.sha, null);
     });
     const trunkSeg = info.get(order[0].sha).seg;
+
+    // Una rama que ya se ha fusionado en su rama madre (su punta es antecesora de la punta de la madre) NO lleva línea larga:
+    // se ve cómo sale, avanza y se cierra con la fusión. Las que siguen abiertas llevan la línea larga hasta el borde.
+    // (Una rama sin commits propios, como una «develop» recién creada, no tiene recorrido que cerrar: siempre se ve abierta.)
+    const ancestorCache = new Map();
+    const ancestorsOf = (sha) => {
+      if (ancestorCache.has(sha)) return ancestorCache.get(sha);
+      const seen = new Set();
+      const stack = [sha];
+      while (stack.length) {
+        const cur = stack.pop();
+        if (seen.has(cur)) continue;
+        seen.add(cur);
+        const nd = info.get(cur);
+        if (nd) nd.c.parents.forEach((p) => stack.push(p));
+      }
+      ancestorCache.set(sha, seen);
+      return seen;
+    };
+    segs.forEach((s) => {
+      if (!s.isBranch) return;
+      const oldest = s.nodes[s.nodes.length - 1];
+      const parent = oldest.c.parents[0] ? info.get(oldest.c.parents[0]) : null;
+      const parentSeg = parent ? parent.seg : null;
+      s.merged = !!(parentSeg && parentSeg !== s && ancestorsOf(parentSeg.nodes[0].sha).has(s.nodes[0].sha));
+      s.longLine = !s.merged;
+    });
 
     // ---- carriles ----
     segs.forEach((seg) => {
@@ -128,12 +170,17 @@
         });
       });
     });
+    // Las ramas con línea larga llegan hasta el borde derecho: ningún otro tramo puede compartir su carril más adelante.
+    segs.forEach((s) => { if (s.longLine) { s.tipCol = s.nodes[0].col; s.end = Infinity; } });
+    virtualSegs.forEach((v) => { v.start = info.get(v.anchorSha).col; v.end = Infinity; });
     trunkSeg.lane = 0;
     trunkSeg.colorIdx = 0;
     const laneUse = [[[trunkSeg.start, trunkSeg.end]]];
-    const others = segs.filter((s) => s !== trunkSeg).sort((a, b) => a.start - b.start || a.end - b.end);
+    const endCmp = (a, b) => (a.end === b.end ? 0 : a.end - b.end);
+    const others = segs.filter((s) => s !== trunkSeg).concat(virtualSegs)
+      .sort((a, b) => (a.start - b.start) || endCmp(a, b) || String(a.name || '').localeCompare(String(b.name || '')));
     others.forEach((seg, i) => {
-      seg.colorIdx = 1 + (i % (PALETTE.length - 1));
+      seg.colorIdx = 1 + i; // un color distinto para cada rama (colorFor genera más allá de la paleta fija)
       for (let k = 1; ; k++) {
         const used = laneUse[k] || (laneUse[k] = []);
         if (used.every((iv) => seg.start > iv[1] + 1 || seg.end < iv[0] - 1)) {
@@ -144,6 +191,10 @@
       }
     });
     const laneCount = laneUse.length;
+    // Color de cada rama por su nombre (las etiquetas de rama usan el color de SU rama, aunque estén sobre un punto de otra).
+    const branchColors = {};
+    segs.forEach((s) => { if (s.name && !(s.name in branchColors)) branchColors[s.name] = s.colorIdx; });
+    virtualSegs.forEach((v) => { branchColors[v.name] = v.colorIdx; });
 
     // ---- nodos ----
     const nodeList = [];
@@ -208,6 +259,57 @@
       };
     }
 
+    // ---- líneas largas del resto de ramas (una por rama local, cada una en su carril) ----
+    const rails = [];
+    segs.forEach((s) => {
+      if (!s.longLine) return;
+      const tipNode = nodeBySha.get(s.nodes[0].sha);
+      rails.push({ name: s.name, lane: s.lane, y: top + s.lane * LANE_H, colorIdx: s.colorIdx, virtual: false, tipX: tipNode.x, anchor: null });
+    });
+    virtualSegs.forEach((v) => {
+      const a = nodeBySha.get(v.anchorSha);
+      rails.push({ name: v.name, lane: v.lane, y: top + v.lane * LANE_H, colorIdx: v.colorIdx, virtual: true, tipX: a.x + 54, anchor: { x: a.x, y: a.y, sha: a.sha } });
+    });
+    rails.sort((a, b) => a.lane - b.lane);
+
+    // ---- marcas de push: dónde se subió algo a GitHub desde este ordenador (según el registro de git) ----
+    // Cada push deja la punta de su rama en el commit «new»; los commits que se subieron son los que llegan a «new» y no a «old».
+    const pushMarks = [];
+    const marksBySha = new Map();
+    const MAX_LISTED = 12;
+    const ZERO = /^0+$/;
+    (opts.pushes || []).forEach((p) => {
+      const nd = nodeBySha.get(p.new);
+      if (!nd) return; // ese commit ya no está en lo dibujado
+      const isNew = ZERO.test(p.old || '0');
+      const branchName = String(p.ref || '').replace(/^[^/]+\//, '');
+      let list = [];
+      let partial = false;
+      if (isNew || info.has(p.old)) {
+        // rama nueva: lo que tiene de más que la principal; si no, lo que hay entre el push anterior y este
+        const had = isNew
+          ? (trunk && branchName !== trunk.name ? ancestorsOf(trunkSeg.nodes[0].sha) : new Set())
+          : ancestorsOf(p.old);
+        const upTo = ancestorsOf(p.new);
+        commits.forEach((c) => { if (upTo.has(c.sha) && !had.has(c.sha)) list.push(c); });
+      } else {
+        // el punto de partida queda fuera de lo dibujado (o se reescribió el historial): solo se enseñan los últimos commits
+        partial = true;
+        let cur = info.get(p.new);
+        while (cur && list.length < 10) { list.push(cur.c); cur = cur.c.parents[0] ? info.get(cur.c.parents[0]) : null; }
+      }
+      const item = {
+        ref: p.ref, ts: p.ts, who: p.who || '', old: p.old, new: p.new, isNew, partial,
+        count: list.length,
+        commits: list.slice(0, MAX_LISTED).map((c) => ({ short: c.sha.slice(0, 7), subject: c.subject || '', author: c.author || '' })),
+        more: Math.max(0, list.length - MAX_LISTED),
+      };
+      let mark = marksBySha.get(p.new);
+      if (!mark) { mark = { sha: p.new, x: nd.x, y: nd.y, items: [] }; marksBySha.set(p.new, mark); pushMarks.push(mark); }
+      mark.items.push(item);
+    });
+    pushMarks.forEach((m) => m.items.sort((a, b) => b.ts - a.ts));
+
     // ---- raíl de la rama principal ----
     // «main» se dibuja como una línea larga que sigue de largo (en el carril de arriba) mientras las demás ramas avanzan en paralelo,
     // aunque main no tenga commits nuevos: así se ve de un vistazo cuánto se han alejado las ramas del tronco.
@@ -231,6 +333,9 @@
       nodes: nodeList,
       edges,
       rail,
+      rails,
+      branchColors,
+      pushMarks,
       pending,
       lanes: laneCount,
       top,
@@ -239,7 +344,7 @@
       palette: PALETTE,
       headSha: head ? head.sha : null,
       trunkName: trunk ? trunk.name : null,
-      segments: segs.map((s) => ({ name: s.name, lane: s.lane, size: s.nodes.length })),
+      segments: segs.map((s) => ({ name: s.name, lane: s.lane, size: s.nodes.length, merged: !!s.merged })),
     };
   }
 
@@ -254,5 +359,5 @@
     return 'M' + x1 + ' ' + y1 + ' L' + (x2 - cw) + ' ' + y1 + ' C' + (x2 - cw * 0.45) + ' ' + y1 + ' ' + (x2 - cw * 0.55) + ' ' + y2 + ' ' + x2 + ' ' + y2;
   }
 
-  return { buildGraph, edgePath, COL_W, LANE_H, PAD_LEFT, NODE_R, CHIP_H, CHIP_STEP, PALETTE };
+  return { buildGraph, edgePath, colorFor, COL_W, LANE_H, PAD_LEFT, NODE_R, CHIP_H, CHIP_STEP, PALETTE };
 });

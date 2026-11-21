@@ -181,6 +181,16 @@ test('consola: ejecuta git y los ayudantes en la carpeta local', { skip: !HAS_GI
   r = await run(['git', 'push', 'origin', 'main']);
   assert.equal(r.code, 0);
   assert.equal(execFileSync('git', ['-C', w.origin, 'log', '-1', '--format=%s', 'main'], { encoding: 'utf8' }).trim(), 'desde la consola');
+  // git apunta cada push en su registro: de ahí salen las marcas del dibujo
+  const st = await Git.getState(w.work);
+  const pushed = st.pushes.find((p) => p.ref === 'origin/main');
+  assert.ok(pushed, 'el push queda apuntado en el registro de git');
+  assert.equal(pushed.new, execFileSync('git', ['-C', w.work, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim());
+  assert.equal(pushed.old, execFileSync('git', ['-C', w.work, 'rev-parse', 'HEAD~1'], { encoding: 'utf8' }).trim());
+  assert.ok(Math.abs(pushed.ts - Date.now() / 1000) < 120, 'con la hora de ahora');
+  assert.ok(pushed.who);
+  // los fetch no cuentan como push
+  assert.ok(st.pushes.every((p) => p.new && p.old));
   // no se puede salir de la carpeta
   out.length = 0;
   r = await run(['cat', '../../fuera.txt']);

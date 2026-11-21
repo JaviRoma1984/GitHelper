@@ -171,7 +171,28 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .g-rail-line, .g-rail-ext { fill: none; stroke-width: 3.2; stroke-linecap: round; }
 .g-rail-ext { opacity: .55; }
 .g-rail-arrow { opacity: .55; }
-.g-rail-label { fill: var(--muted); font: italic 11.5px var(--mono); paint-order: stroke; stroke: var(--bg); stroke-width: 4px; }
+.g-rail-label { fill: var(--muted); font: italic 600 12.5px var(--mono); paint-order: stroke; stroke: var(--bg); stroke-width: 4px; }
+/* marca de push (subida a GitHub) */
+.g-push { cursor: help; }
+.g-push circle { fill: #238636; stroke: var(--bg); stroke-width: 2.5; }
+.g-push path { fill: none; stroke: #fff; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.g-push:hover circle { fill: #2ea043; stroke: #fff; stroke-width: 1.5; }
+.legend .push { width: 13px; height: 13px; border-radius: 50%; background: #238636; color: #fff; font: 700 10px/13px var(--sans); text-align: center; font-style: normal; }
+#tip {
+  position: fixed; z-index: 70; max-width: 440px; pointer-events: none;
+  background: #1c2230; border: 1px solid #484f58; border-radius: 8px; padding: 8px 12px;
+  box-shadow: 0 8px 28px #000b; font-size: 13px; line-height: 1.4;
+}
+#tip[hidden] { display: none; }
+#tip .tip-item + .tip-item { margin-top: 9px; padding-top: 8px; border-top: 1px solid var(--border); }
+#tip .tip-head { font-weight: 600; color: #56d364; }
+#tip .tip-head b { color: var(--text); font-family: var(--mono); font-weight: 600; }
+#tip .tip-meta { color: var(--muted); font-size: 12px; }
+#tip .tip-what { margin-top: 3px; }
+#tip ul { margin: 4px 0 0; padding-left: 18px; }
+#tip li { margin: 1px 0; }
+#tip li.more { color: var(--muted); list-style: none; margin-left: -4px; }
+#tip code { background: #ffffff14; color: var(--muted); }
 .g-node { cursor: pointer; }
 .g-node:hover .g-shape { filter: brightness(1.25); }
 .g-shape { stroke: var(--bg); stroke-width: 3; }

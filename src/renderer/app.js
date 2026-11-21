@@ -159,6 +159,14 @@
   // ---------------------------------------------------------------- visualizador de GitHub
   const cmdBtn = (cmd) => '<span class="cmd" data-cmd="' + esc(cmd) + '">' + esc(cmd) + '</span>';
 
+  /** Los push que se marcan en el dibujo de GitHub: los hechos desde la carpeta local enlazada con ESE repositorio (git los apunta en su registro). */
+  function pushesForRemote() {
+    const st = S.local;
+    if (!st || !st.isRepo || !st.origin || !S.remoteUrl || !sameRepo(st.origin, S.remoteUrl)) return [];
+    return (st.pushes || []).filter((p) => p.ref.startsWith('origin/'));
+  }
+  const pushSig = () => pushesForRemote().map((p) => p.ref + ':' + p.new + ':' + p.ts).join('|');
+
   function remoteEmptyHtml() {
     return '<div class="empty-card"><h3>☁ Aquí se dibujan las ramas de tu repositorio de GitHub</h3>' +
       '<ol><li>Escribe arriba su dirección (por ejemplo <code>https://github.com/usuario/repositorio</code>) y pulsa <b>Ver</b>.</li>' +
@@ -205,7 +213,8 @@
         '<ol><li>En tu carpeta local: ' + cmdBtn('git add .') + ' y ' + cmdBtn('git commit -m "Primer commit"') + '</li><li>Enlázala y súbela: ' + cmdBtn('git remote add origin ' + r.url) + ' y ' + cmdBtn('git push -u origin main') + '</li></ol></div>');
       return;
     }
-    remoteView.render(r.commits, { currentBranch: r.defaultBranch });
+    S.remotePushSig = pushSig();
+    remoteView.render(r.commits, { currentBranch: r.defaultBranch, pushes: pushesForRemote() });
   }
 
   async function showRemote(url, o) {
@@ -327,6 +336,7 @@
     localView.render(st.commits, {
       currentBranch: st.branch,
       headSha: st.headSha,
+      pushes: st.pushes,
       pending: { count: st.files.length, staged: st.counts.staged, conflicts: st.counts.conflicts },
     });
   }
@@ -337,6 +347,8 @@
     if (seq !== localSeq) return S.local;
     S.local = st;
     renderLocal();
+    // Si cambian los push de esta carpeta (acabas de subir algo), se actualizan también las marcas del dibujo de GitHub.
+    if (S.remote && S.remote.ok && !S.remote.empty && pushSig() !== S.remotePushSig) renderRemote();
     updateLocalHint();
     return st;
   }

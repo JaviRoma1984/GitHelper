@@ -105,5 +105,23 @@
     return m ? { owner: m[1], repo: m[2], web: 'https://github.com/' + m[1] + '/' + m[2] } : null;
   }
 
-  return { LOG_FORMAT, parseDecorations, parseLog, parseStatus, parseGithubUrl };
+  /**
+   * Registro (reflog) de una rama remota, p. ej. .git/logs/refs/remotes/origin/main. Cada línea es
+   *   <antes> <después> Nombre <correo> <segundos> <zona>\t<mensaje>
+   * Cuando haces «git push», git apunta ahí «update by push»: de ahí sale cuándo se subió algo y qué commits iban.
+   * Solo se devuelven las subidas (no los fetch) y no las borrados de rama.
+   * @returns {{ref:string, old:string, new:string, who:string, ts:number}[]}
+   */
+  function parsePushLog(text, ref) {
+    const out = [];
+    String(text || '').split('\n').forEach((line) => {
+      const m = line.match(/^([0-9a-f]{40}) ([0-9a-f]{40}) (.*?) <[^>]*> (\d+) [+-]\d{4}\t(.*)$/);
+      if (!m || !/^update by push/.test(m[5])) return;
+      if (/^0+$/.test(m[2])) return;
+      out.push({ ref, old: m[1], new: m[2], who: m[3], ts: parseInt(m[4], 10) });
+    });
+    return out;
+  }
+
+  return { LOG_FORMAT, parseDecorations, parseLog, parseStatus, parseGithubUrl, parsePushLog };
 });

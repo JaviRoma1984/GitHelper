@@ -112,6 +112,32 @@ function parseRemotes(text) {
   return Array.from(map.values());
 }
 
+/**
+ * Las subidas (git push) hechas desde esta carpeta, según el registro que git guarda de cada rama remota
+ * (.git/logs/refs/remotes/*). Solo están las que se hicieron desde ESTE ordenador y que git aún no ha olvidado (unos 90 días).
+ */
+async function readPushes(cwd) {
+  const gp = await git(cwd, ['rev-parse', '--git-path', 'logs/refs/remotes']);
+  if (gp.code !== 0) return [];
+  const base = path.resolve(cwd, gp.out.trim());
+  const out = [];
+  const walk = (dir, rel) => {
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    entries.forEach((e) => {
+      const name = rel ? rel + '/' + e.name : e.name;
+      if (e.isDirectory()) { walk(path.join(dir, e.name), name); return; }
+      if (/(^|\/)HEAD$/.test(name)) return;
+      let text = '';
+      try { text = fs.readFileSync(path.join(dir, e.name), 'utf8'); } catch { return; }
+      GP.parsePushLog(text, name).forEach((p) => out.push(p));
+    });
+  };
+  walk(base, '');
+  out.sort((a, b) => b.ts - a.ts);
+  return out.slice(0, 80);
+}
+
 async function getState(cwd) {
   const state = {
     cwd: cwd || null,
@@ -140,6 +166,7 @@ async function getState(cwd) {
     branches: [],
     remoteBranches: [],
     tags: [],
+    pushes: [],
     limit: LOG_LIMIT,
     empty: false,
   };
@@ -194,8 +221,9 @@ async function getState(cwd) {
   if (!state.unborn) {
     const log = await git(cwd, ['log', '--branches', '--remotes', '--tags', 'HEAD', '--topo-order', '-n', String(LOG_LIMIT), '--decorate=full', '--format=' + GP.LOG_FORMAT]);
     if (log.code === 0) state.commits = GP.parseLog(log.out);
+    state.pushes = await readPushes(cwd);
   }
   return state;
 }
 
-module.exports = { runProcess, userGitArgs, getState, baseEnv, parseRemotes, git, LOG_LIMIT };
+module.exports = { runProcess, userGitArgs, getState, readPushes, baseEnv, parseRemotes, git, LOG_LIMIT };

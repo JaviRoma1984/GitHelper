@@ -41,7 +41,15 @@
   function buildSvg(model, mode, viewW) {
     const W = Math.max(model.width, viewW || 0);
     const nodes = new Map(model.nodes.map((n) => [n.sha, n]));
-    const color = (i) => G.PALETTE[i % G.PALETTE.length];
+    const color = (i) => G.colorFor(i); // un color distinto por rama (más allá de la paleta fija se generan otros)
+    // Las etiquetas de rama llevan el color de SU rama, aunque estén sobre un punto que pertenece a otra (p. ej. «develop» sobre un commit de main).
+    const bc = model.branchColors || {};
+    const chipColor = (chip, n) => {
+      if (chip.kind !== 'branch' && chip.kind !== 'remote') return color(n.colorIdx);
+      const local = chip.kind === 'remote' ? chip.name.replace(/^[^/]+\//, '') : chip.name;
+      const idx = bc[local] !== undefined ? bc[local] : bc[chip.name];
+      return color(idx !== undefined ? idx : n.colorIdx);
+    };
     let s = '<svg xmlns="http://www.w3.org/2000/svg" width="' + W + '" height="' + model.height + '" viewBox="0 0 ' + W + ' ' + model.height + '">';
 
     for (let l = 0; l < model.lanes; l++) {
@@ -55,12 +63,26 @@
       const x2 = W - 22;
       const c = color(r.colorIdx);
       const behind = r.lastX > r.tipX;
-      s += '<g class="g-rail"><title>' + esc('«' + r.name + '», la rama principal' + (behind ? ': no tiene commits nuevos desde su último punto, pero otras ramas han seguido avanzando' : '')) + '</title>' +
+      s += '<g class="g-rail" data-branch="' + esc(r.name) + '"><title>' + esc('«' + r.name + '», la rama principal' + (behind ? ': no tiene commits nuevos desde su último punto, pero otras ramas han seguido avanzando' : '')) + '</title>' +
         '<path class="g-rail-line" d="M' + r.x1 + ' ' + r.y + ' L' + r.tipX + ' ' + r.y + '" stroke="' + c + '"/>' +
         '<path class="g-rail-ext" d="M' + r.tipX + ' ' + r.y + ' L' + (x2 - 6) + ' ' + r.y + '" stroke="' + c + '"/>' +
         '<polygon class="g-rail-arrow" points="' + (x2 - 12) + ',' + (r.y - 7) + ' ' + x2 + ',' + r.y + ' ' + (x2 - 12) + ',' + (r.y + 7) + '" fill="' + c + '"/>' +
-        '<text class="g-rail-label" x="' + (x2 - 18) + '" y="' + (r.y - 12) + '" text-anchor="end">' + esc(r.name) + '</text></g>';
+        '<text class="g-rail-label" style="fill:' + c + '" x="' + (x2 - 18) + '" y="' + (r.y - 12) + '" text-anchor="end">' + esc(r.name) + '</text></g>';
     }
+
+    // El resto de ramas: cada una, una línea larga en su carril, igual que main (más tenue después de su último commit).
+    (model.rails || []).forEach((r) => {
+      const x2 = W - 22;
+      const c = color(r.colorIdx);
+      const tip = r.virtual
+        ? 'Rama «' + r.name + '»: todavía no tiene commits propios (apunta al mismo commit que otra rama), pero sigue ahí, en paralelo'
+        : 'Rama «' + r.name + '»: sigue en paralelo al resto';
+      s += '<g class="g-rail g-rail-branch' + (r.virtual ? ' virtual' : '') + '" data-branch="' + esc(r.name) + '"><title>' + esc(tip) + '</title>';
+      if (r.virtual) s += '<path class="g-edge" d="' + G.edgePath({ kind: 'fork' }, r.anchor, { x: r.tipX, y: r.y }) + '" stroke="' + c + '"/>';
+      s += '<path class="g-rail-ext" d="M' + r.tipX + ' ' + r.y + ' L' + (x2 - 6) + ' ' + r.y + '" stroke="' + c + '"/>' +
+        '<polygon class="g-rail-arrow" points="' + (x2 - 12) + ',' + (r.y - 7) + ' ' + x2 + ',' + r.y + ' ' + (x2 - 12) + ',' + (r.y + 7) + '" fill="' + c + '"/>' +
+        '<text class="g-rail-label" style="fill:' + c + '" x="' + (x2 - 18) + '" y="' + (r.y - 12) + '" text-anchor="end">' + esc(r.name) + '</text></g>';
+    });
 
     model.edges.forEach((e) => {
       const from = nodes.get(e.from);
@@ -105,13 +127,66 @@
         const w = chipWidth(chip);
         const cy = n.y - (n.isMerge ? 14 : G.NODE_R) - 9 - G.CHIP_H / 2 - i * G.CHIP_STEP - (n.isHead ? 4 : 0);
         const cls = 'chip chip-' + chip.kind + (chip.head ? ' is-head' : '') + (chip.detached ? ' detached' : '');
-        s += '<g class="' + cls + '"' + (chip.kind === 'tag' ? '' : ' style="--c:' + color(n.colorIdx) + '"') + ' data-chip="' + chip.kind + '" data-name="' + esc(chip.name) + '" transform="translate(' + n.x + ' ' + cy + ')">' +
+        s += '<g class="' + cls + '"' + (chip.kind === 'tag' ? '' : ' style="--c:' + chipColor(chip, n) + '"') + ' data-chip="' + chip.kind + '" data-name="' + esc(chip.name) + '" transform="translate(' + n.x + ' ' + cy + ')">' +
           '<title>' + esc(chipTitle(chip, mode)) + '</title>' +
           '<rect x="' + (-w / 2) + '" y="' + (-G.CHIP_H / 2) + '" width="' + w + '" height="' + G.CHIP_H + '" rx="10"/>' +
           '<text y="1" text-anchor="middle" dominant-baseline="central">' + esc(chip.label) + '</text></g>';
       });
     });
+    // Marcas de push: una chapa verde con una flecha hacia arriba junto al commit que quedó como punta de la rama al subirla a GitHub.
+    (model.pushMarks || []).forEach((m, i) => {
+      const cx = m.x + 28; // a la derecha del punto, sobre su línea (así no tapa las etiquetas de rama que van encima)
+      const cy = m.y;
+      s += '<g class="g-push" data-push="' + i + '"><circle cx="' + cx + '" cy="' + cy + '" r="9"/>' +
+        '<path d="M' + cx + ' ' + (cy + 4.2) + ' V' + (cy - 4.2) + ' M' + (cx - 3.8) + ' ' + (cy - 0.4) + ' L' + cx + ' ' + (cy - 4.4) + ' L' + (cx + 3.8) + ' ' + (cy - 0.4) + '"/></g>';
+    });
     return s + '</svg>';
+  }
+
+  // ---- ventana emergente (la de los push) ----
+  const two = (n) => String(n).padStart(2, '0');
+  const fmtDate = (ts) => {
+    const d = new Date(ts * 1000);
+    return two(d.getDate()) + '-' + two(d.getMonth() + 1) + '-' + d.getFullYear() + ' ' + two(d.getHours()) + ':' + two(d.getMinutes());
+  };
+
+  /** Texto de la ventana: qué se subió en cada push que acabó en este commit. */
+  function pushHtml(mark) {
+    return mark.items.map((it) => {
+      const what = it.isNew
+        ? 'Rama nueva en GitHub' + (it.count ? ': ' + it.count + (it.count === 1 ? ' commit propio' : ' commits propios') : '')
+        : (it.partial ? 'Se subieron commits (el punto de partida queda fuera del dibujo; se enseñan los últimos)' : 'Se ' + (it.count === 1 ? 'subió 1 commit' : 'subieron ' + it.count + ' commits'));
+      const list = it.commits.map((c) => '<li><code>' + esc(c.short) + '</code> ' + esc(c.subject || '(sin mensaje)') + '</li>').join('') +
+        (it.more ? '<li class="more">… y ' + it.more + ' más</li>' : '');
+      return '<div class="tip-item"><div class="tip-head">⬆ Push a <b>' + esc(it.ref) + '</b></div>' +
+        '<div class="tip-meta">' + esc(fmtDate(it.ts)) + (it.who ? ' · ' + esc(it.who) : '') + '</div>' +
+        '<div class="tip-what">' + esc(what) + '</div>' + (list ? '<ul>' + list + '</ul>' : '') + '</div>';
+    }).join('');
+  }
+
+  function tipEl() { return document.getElementById('tip'); }
+  function moveTip(ev) {
+    const t = tipEl();
+    if (!t || t.hidden) return;
+    const pad = 14;
+    let x = ev.clientX + pad;
+    let y = ev.clientY + pad + 4;
+    const r = t.getBoundingClientRect();
+    if (x + r.width > window.innerWidth - 8) x = Math.max(8, ev.clientX - r.width - pad);
+    if (y + r.height > window.innerHeight - 8) y = Math.max(8, ev.clientY - r.height - pad);
+    t.style.left = x + 'px';
+    t.style.top = y + 'px';
+  }
+  function showTip(html, ev) {
+    const t = tipEl();
+    if (!t) return;
+    t.innerHTML = html;
+    t.hidden = false;
+    moveTip(ev);
+  }
+  function hideTip() {
+    const t = tipEl();
+    if (t) t.hidden = true;
   }
 
   class GraphView {
@@ -141,10 +216,19 @@
         const node = e.target.closest('[data-sha]');
         if (node) this.handlers.onNode && this.handlers.onNode(this.model && this.model.nodes.find((n) => n.sha === node.getAttribute('data-sha')), this.mode);
       });
+      // Al poner el puntero sobre la marca de un push, se enseña qué se subió.
+      this.el.addEventListener('mouseover', (e) => {
+        const g = e.target.closest && e.target.closest('.g-push');
+        const mark = g && this.model && this.model.pushMarks ? this.model.pushMarks[parseInt(g.getAttribute('data-push'), 10)] : null;
+        if (mark) showTip(pushHtml(mark), e);
+      });
+      this.el.addEventListener('mousemove', moveTip);
+      this.el.addEventListener('mouseout', (e) => { if (e.target.closest && e.target.closest('.g-push')) hideTip(); });
     }
 
     /** Mensajes (vacío, cargando, error…) en lugar del dibujo. */
     showHtml(html) {
+      hideTip();
       this.model = null;
       this.last = null;
       this.lastKey = null;
@@ -179,7 +263,8 @@
       const s = this.scroller;
       const targetX = (pending && !pending.ring ? pending.x : node.x);
       s.scrollLeft = Math.max(0, targetX - s.clientWidth * 0.65);
-      s.scrollTop = Math.max(0, node.y - s.clientHeight * 0.55);
+      // Se mira desde arriba (así main y las primeras ramas siguen a la vista) y solo se baja lo justo para ver el punto y su texto.
+      s.scrollTop = Math.max(0, node.y + 70 - s.clientHeight);
     }
   }
 

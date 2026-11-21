@@ -115,6 +115,7 @@ exports.run = async function run({ win, app, getCwd, getData, dataFile, cacheRoo
     put('c.txt', 'c', 'Cambio en main');
     git(work, 'merge', '-q', '--no-ff', 'dev', '-m', 'Fusion de dev');
     git(work, 'tag', 'v1');
+    git(work, 'branch', 'develop'); // rama sin commits propios (apunta al mismo commit que main): también debe verse como una línea
     for (let i = 0; i < (extraCommits || 0); i++) put('x' + i + '.txt', 'x' + i, 'Extra ' + (i + 1));
     const bare = path.join(dir, 'github.git');
     git(dir, 'clone', '-q', '--bare', work, bare);
@@ -174,7 +175,7 @@ exports.run = async function run({ win, app, getCwd, getData, dataFile, cacheRoo
     check('una fusión aparece como rombo', (await $count('#remote-graph polygon.g-shape')) === 1, await $count('#remote-graph polygon.g-shape'));
     check('la dirección queda guardada en el archivo de datos', readData().repos.length === 1 && readData().repos[0].url === p1.bare, JSON.stringify(readData().repos));
     check('la lista desplegable ya tiene 1 repositorio y el campo dice «guardado»', (await $options('remote-list')).length === 1 && (await $text('#remote-hint')).includes('Guardado'), JSON.stringify(await $options('remote-list')) + await $text('#remote-hint'));
-    check('la franja de GitHub resume ramas y commits', /2 ramas/.test(await strip('remote-strip')) && /4 commits/.test(await strip('remote-strip')), await strip('remote-strip'));
+    check('la franja de GitHub resume ramas y commits', /3 ramas/.test(await strip('remote-strip')) && /4 commits/.test(await strip('remote-strip')), await strip('remote-strip'));
     const railInfo = (graphId) => exec(`(() => {
       const g = document.querySelector('#${graphId} .g-rail'); if (!g) return null;
       const ext = g.querySelector('.g-rail-ext').getAttribute('d'); const x2 = parseFloat(ext.split('L')[1]);
@@ -186,6 +187,22 @@ exports.run = async function run({ win, app, getCwd, getData, dataFile, cacheRoo
     const ri = await railInfo('remote-graph');
     check('main se dibuja como una línea larga que sigue más allá de su último commit', ri && ri.label === 'main' && ri.x2 > ri.maxNode + 40, JSON.stringify(ri));
     check('y esa línea llega hasta el borde derecho del panel', ri && ri.svg >= ri.panel - 16, JSON.stringify(ri));
+    const railList = (graphId) => exec(`Array.from(document.querySelectorAll('#${graphId} .g-rail')).map((g) => {
+      const ext = g.querySelector('.g-rail-ext'); const m = ext.getAttribute('d').match(/^M([\\d.]+) ([\\d.]+)/);
+      const lab = g.querySelector('.g-rail-label');
+      return { name: g.getAttribute('data-branch'), virtual: g.classList.contains('virtual'), y: parseFloat(m[2]), stroke: ext.getAttribute('stroke'), label: lab.textContent, labelFill: lab.style.fill };
+    })`);
+    const rails0 = await railList('remote-graph');
+    const names0 = rails0.map((r) => r.name).sort();
+    check('main y develop (abiertas) tienen su línea larga; dev, ya fusionada en main, no', JSON.stringify(names0) === JSON.stringify(['develop', 'main']), JSON.stringify(names0));
+    check('dev sigue representada (etiqueta, sus commits en su carril y la fusión que la cierra), solo sin la línea que va al infinito', (await chips('remote-graph')).includes('dev') && (await $count('#remote-graph .g-edge')) >= 4, JSON.stringify(await chips('remote-graph')));
+    check('«develop», que no tiene commits propios, también se ve como línea', rails0.some((r) => r.name === 'develop' && r.virtual), JSON.stringify(rails0));
+    check('cada línea va en su carril (alturas distintas)', new Set(rails0.map((r) => r.y)).size === rails0.length, JSON.stringify(rails0.map((r) => r.y)));
+    check('cada rama tiene un color distinto', new Set(rails0.map((r) => r.stroke)).size === rails0.length, JSON.stringify(rails0.map((r) => r.stroke)));
+    check('y en cada línea sale su nombre, en el color de su rama, como en main', rails0.every((r) => r.label === r.name && r.labelFill), JSON.stringify(rails0.map((r) => [r.name, r.label, r.labelFill])));
+    const chipDevelop = await exec(`(() => { const c = document.querySelector('#remote-graph .chip[data-name=develop]'); return c ? c.getAttribute('style') : null; })()`);
+    const devRail = rails0.find((r) => r.name === 'develop');
+    check('la etiqueta «develop» (sobre un commit de main) lleva el color de la línea de develop', !!chipDevelop && !!devRail && chipDevelop.includes(devRail.stroke), JSON.stringify({ chipDevelop, stroke: devRail && devRail.stroke }));
     check('el repositorio no aparece como carpeta de trabajo (solo hay copia desnuda en los datos del programa)', fs.readdirSync(cacheRoot()).length === 1, fs.readdirSync(cacheRoot()).join(','));
     await shot('02-github');
 
@@ -217,9 +234,29 @@ exports.run = async function run({ win, app, getCwd, getData, dataFile, cacheRoo
     check('GitHub todavía no tiene esa rama', (await nodes('remote-graph')) === 4 && !(await chips('remote-graph')).includes('prueba'), '');
     check('la franja local avisa de que la rama no está subida', (await strip('local-strip')).includes('rama sin subir'), await strip('local-strip'));
     await shot('04-commit-local');
+    check('antes de hacer push no hay ninguna marca de push (los fetch no cuentan)', (await $count('#local-graph .g-push')) === 0 && (await $count('#remote-graph .g-push')) === 0, 'local ' + await $count('#local-graph .g-push') + ' / GitHub ' + await $count('#remote-graph .g-push'));
     await run('git push -u origin prueba');
     check('tras subir, el dibujo de GitHub se actualiza solo con la rama nueva', await waitFor(async () => (await nodes('remote-graph')) === 5 && (await chips('remote-graph')).includes('prueba'), 20000), JSON.stringify(await chips('remote-graph')) + ' nodos: ' + await nodes('remote-graph'));
     check('y la copia local recuerda origin/prueba', await waitFor(async () => (await chips('local-graph')).includes('origin/prueba')), JSON.stringify(await chips('local-graph')));
+    // marcas de push: aparecen en los dos dibujos, en el commit donde acabó la subida, con la descripción al pasar el puntero
+    check('tras el push, el dibujo local marca dónde se subió (una marca)', await waitFor(async () => (await $count('#local-graph .g-push')) === 1), 'marcas: ' + await $count('#local-graph .g-push'));
+    check('y el dibujo de GitHub marca el mismo push (la carpeta está enlazada con ese repositorio)', await waitFor(async () => (await $count('#remote-graph .g-push')) === 1), 'marcas: ' + await $count('#remote-graph .g-push'));
+    const hoverPush = async (graphId) => {
+      await exec(`document.querySelector('#${graphId} .g-push').dispatchEvent(new MouseEvent('mouseover', {bubbles:true, clientX: 400, clientY: 300}))`);
+      return exec(`(() => { const t = document.getElementById('tip'); return { shown: !t.hidden, text: t.innerText }; })()`);
+    };
+    const tipL = await hoverPush('local-graph');
+    check('al poner el puntero sobre la marca se explica el push: rama, fecha y commits subidos', tipL.shown && /Push a origin\/prueba/.test(tipL.text) && /\d{2}-\d{2}-\d{4} \d{2}:\d{2}/.test(tipL.text) && /Commit desde la consola/.test(tipL.text) && /1 commit/.test(tipL.text) && /Rama nueva en GitHub: 1 commit propio/.test(tipL.text), JSON.stringify(tipL));
+    await shot('05b-tooltip-push');
+    await exec(`document.querySelector('#local-graph .g-push').dispatchEvent(new MouseEvent('mouseout', {bubbles:true}))`);
+    check('al quitar el puntero, la ventana desaparece', (await exec('document.getElementById("tip").hidden')) === true, '');
+    const tipR = await hoverPush('remote-graph');
+    check('lo mismo en el dibujo de GitHub', tipR.shown && /Commit desde la consola/.test(tipR.text), JSON.stringify(tipR));
+    await exec(`document.querySelector('#remote-graph .g-push').dispatchEvent(new MouseEvent('mouseout', {bubbles:true}))`);
+    const pushMarkPos = await exec(`(() => { const m = document.querySelector('#local-graph .g-push circle'); const tipNode = Array.from(document.querySelectorAll('#local-graph .g-node')).find((n) => n.querySelector('title').textContent.includes('Commit desde la consola')); const c = tipNode.querySelector('.g-shape'); return { dx: parseFloat(m.getAttribute('cx')) - parseFloat(c.getAttribute('cx')), dy: parseFloat(m.getAttribute('cy')) - parseFloat(c.getAttribute('cy')) }; })()`);
+    check('la marca está pegada al commit que se subió', Math.abs(pushMarkPos.dx) < 40 && Math.abs(pushMarkPos.dy) < 40, JSON.stringify(pushMarkPos));
+    const namesAfter = (await railList('remote-graph')).map((r) => r.name).sort();
+    check('la rama nueva «prueba» (sin fusionar) abre su línea larga y dev, fusionada, sigue sin ella', JSON.stringify(namesAfter) === JSON.stringify(['develop', 'main', 'prueba']), JSON.stringify(namesAfter));
     const rp = await railInfo('remote-graph');
     check('con una rama más avanzada que main, la línea de main sigue en paralelo y lo explica', rp && rp.x2 > rp.maxNode && rp.title.includes('otras ramas han seguido avanzando'), JSON.stringify(rp));
     const rl2 = await railInfo('local-graph');
@@ -343,9 +380,14 @@ exports.run = async function run({ win, app, getCwd, getData, dataFile, cacheRoo
     const after = await rect('remote-panel');
     const afterLocal = await rect('local-panel');
     check('arrastrar el separador de en medio cambia el ancho de cada visualizador', after.w > before.w + 80 && afterLocal.w < beforeLocal.w - 80, JSON.stringify({ before: before.w, after: after.w, local: afterLocal.w }));
-    const rw = await railInfo('remote-graph');
-    const rwl = await railInfo('local-graph');
-    check('al cambiar el ancho de los paneles, la línea de main se reajusta hasta el borde de cada uno', rw && rwl && rw.svg >= rw.panel - 16 && rwl.svg >= rwl.panel - 16, JSON.stringify({ remoto: rw && [rw.svg, rw.panel], local: rwl && [rwl.svg, rwl.panel] }));
+    let rw = null;
+    let rwl = null;
+    const fits = await waitFor(async () => { // el reajuste ocurre en el siguiente fotograma: se espera a que llegue
+      rw = await railInfo('remote-graph');
+      rwl = await railInfo('local-graph');
+      return rw && rwl && rw.svg >= rw.panel - 16 && rwl.svg >= rwl.panel - 16;
+    }, 5000);
+    check('al cambiar el ancho de los paneles, la línea de main se reajusta hasta el borde de cada uno', fits, JSON.stringify({ remoto: rw && [rw.svg, rw.panel], local: rwl && [rwl.svg, rwl.panel] }));
     await shot('10b-ancho-cambiado');
     await exec(`(() => { const h = document.getElementById('split-2'); const r = h.getBoundingClientRect();
       h.dispatchEvent(new MouseEvent('mousedown', {bubbles:true, clientX: r.x+20, clientY: r.y+2}));
