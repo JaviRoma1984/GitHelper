@@ -1,0 +1,20 @@
+{
+  "name": "githelper",
+  "productName": "GitHelper",
+  "version": "1.0.0",
+  "description": "Visualizador gráfico de las ramas de un repositorio de GitHub y de su copia local, con consola de git/gh y lista de órdenes explicadas.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test \"test/*.test.js\"",
+    "e2e": "node scripts/e2e-todo.js",
+    "icono": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/make-icon.ps1",
+    "empaquetar": "node scripts/empaquetar.js",
+    "instalar": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/instalar.ps1"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@electron/packager": "20.3.0",
+    "electron": "45.3.2"
+  }
+}

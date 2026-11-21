@@ -1,0 +1,240 @@
+/* GitHelper · Cálculo del dibujo de ramas (sin DOM, se puede probar desde Node).
+ *
+ * Entrada: commits ordenados del más nuevo al más viejo (orden topológico: los hijos antes que los padres).
+ *   { sha, parents:[sha], subject, author, ts, refs:[{type:'branch'|'remote'|'tag', name, head}], headDetached }
+ * Salida: nodos con posición (x,y), aristas y medidas del dibujo.
+ *
+ * Reglas del dibujo:
+ *   - El tiempo avanza de izquierda a derecha (un commit por columna).
+ *   - «main» (o master) siempre es el carril de arriba.
+ *   - Cada rama va en su propio carril. Un carril se reutiliza solo cuando la rama anterior ya acabó.
+ *   - Los commits que pertenecen a ramas ya borradas (solo se llega a ellos por una fusión) también tienen carril.
+ */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else (root.GH = root.GH || {}).Graph = factory();
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  const COL_W = 92;
+  const LANE_H = 100;
+  const PAD_LEFT = 64;
+  const PAD_RIGHT = 160;
+  const NODE_R = 9;
+  const CHIP_H = 19;
+  const CHIP_STEP = 22;
+  const MAX_CHIPS = 4;
+  const MAX_CHIP_CHARS = 13;
+  const PALETTE = ['#58a6ff', '#f0883e', '#bc8cff', '#3fb950', '#ff7b72', '#e3b341', '#56d4dd', '#f778ba'];
+  const TRUNK_NAMES = ['main', 'master', 'trunk', 'develop'];
+
+  const short = (name) => (name.length > MAX_CHIP_CHARS ? name.slice(0, MAX_CHIP_CHARS - 1) + '…' : name);
+
+  function chipsFor(commit) {
+    const refs = commit.refs || [];
+    const chips = [];
+    // De abajo (junto al nodo) hacia arriba: etiquetas, ramas remotas, otras ramas, la rama actual y, encima, HEAD.
+    refs.filter((r) => r.type === 'tag').forEach((r) => chips.push({ kind: 'tag', name: r.name, label: short(r.name) }));
+    refs.filter((r) => r.type === 'remote').forEach((r) => chips.push({ kind: 'remote', name: r.name, label: short(r.name) }));
+    refs.filter((r) => r.type === 'branch' && !r.head).forEach((r) => chips.push({ kind: 'branch', name: r.name, label: short(r.name), head: false }));
+    refs.filter((r) => r.type === 'branch' && r.head).forEach((r) => chips.push({ kind: 'branch', name: r.name, label: short(r.name), head: true }));
+    if (refs.some((r) => r.head) || commit.headDetached) {
+      chips.push({ kind: 'head', name: 'HEAD', label: 'HEAD', detached: !!commit.headDetached });
+    }
+    if (chips.length > MAX_CHIPS) {
+      const extra = chips.length - (MAX_CHIPS - 1);
+      const kept = chips.slice(0, MAX_CHIPS - 1);
+      kept.push({ kind: 'more', name: '+' + extra, label: '+' + extra, hidden: chips.slice(MAX_CHIPS - 1).map((c) => c.name) });
+      return kept;
+    }
+    return chips;
+  }
+
+  function buildGraph(commits, opts) {
+    opts = opts || {};
+    const total = commits.length;
+    if (!total) return { empty: true, nodes: [], edges: [], width: 0, height: 0, palette: PALETTE, lanes: 0 };
+
+    const info = new Map();
+    commits.forEach((c, i) => info.set(c.sha, { c, sha: c.sha, col: total - 1 - i, seg: null, lane: 0 }));
+
+    const children = new Map();
+    commits.forEach((c) => {
+      c.parents.forEach((p) => {
+        if (!info.has(p)) return;
+        if (!children.has(p)) children.set(p, []);
+        children.get(p).push(info.get(c.sha));
+      });
+    });
+
+    // ---- puntas de rama ----
+    const localTips = [];
+    const remoteTips = [];
+    commits.forEach((c) => {
+      (c.refs || []).forEach((r) => {
+        if (r.type === 'branch') localTips.push({ name: r.name, sha: c.sha, col: info.get(c.sha).col, head: !!r.head });
+        else if (r.type === 'remote') remoteTips.push({ name: r.name, sha: c.sha, col: info.get(c.sha).col });
+      });
+    });
+    const detached = commits.find((c) => c.headDetached);
+
+    let trunk = null;
+    for (const nm of TRUNK_NAMES) {
+      trunk = localTips.find((t) => t.name === nm);
+      if (trunk) break;
+    }
+    if (!trunk && opts.currentBranch) trunk = localTips.find((t) => t.name === opts.currentBranch) || null;
+    if (!trunk && localTips.length) trunk = localTips.slice().sort((a, b) => a.name.localeCompare(b.name))[0];
+
+    const byAge = (a, b) => a.col - b.col || a.name.localeCompare(b.name);
+    const order = [];
+    order.push(trunk ? { name: trunk.name, sha: trunk.sha } : { name: null, sha: commits[0].sha });
+    localTips.filter((t) => t !== trunk).sort(byAge).forEach((t) => order.push({ name: t.name, sha: t.sha }));
+    remoteTips.sort(byAge).forEach((t) => order.push({ name: t.name, sha: t.sha }));
+    if (detached) order.push({ name: 'HEAD', sha: detached.sha });
+
+    // ---- tramos: cada tramo sigue el «primer padre» desde la punta hasta chocar con otro ya reservado ----
+    const segs = [];
+    const walk = (startSha, name) => {
+      const start = info.get(startSha);
+      if (!start || start.seg) return null;
+      const seg = { name, nodes: [], lane: 0, colorIdx: 0, start: 0, end: 0 };
+      let cur = start;
+      while (cur && !cur.seg) {
+        cur.seg = seg;
+        seg.nodes.push(cur);
+        const p = cur.c.parents[0];
+        cur = p ? info.get(p) : null;
+      }
+      segs.push(seg);
+      return seg;
+    };
+    order.forEach((t) => walk(t.sha, t.name));
+    // Commits a los que solo se llega por una fusión (ramas ya borradas).
+    commits.forEach((c) => {
+      if (!info.get(c.sha).seg) walk(c.sha, null);
+    });
+    const trunkSeg = info.get(order[0].sha).seg;
+
+    // ---- carriles ----
+    segs.forEach((seg) => {
+      const oldest = seg.nodes[seg.nodes.length - 1];
+      const fp = oldest.c.parents[0] ? info.get(oldest.c.parents[0]) : null;
+      seg.start = fp ? Math.min(oldest.col, fp.col) : oldest.col;
+      seg.end = seg.nodes[0].col;
+      seg.nodes.forEach((nd) => {
+        (children.get(nd.sha) || []).forEach((ch) => {
+          if (ch.seg !== seg && ch.c.parents.indexOf(nd.sha) > 0) seg.end = Math.max(seg.end, ch.col);
+        });
+      });
+    });
+    trunkSeg.lane = 0;
+    trunkSeg.colorIdx = 0;
+    const laneUse = [[[trunkSeg.start, trunkSeg.end]]];
+    const others = segs.filter((s) => s !== trunkSeg).sort((a, b) => a.start - b.start || a.end - b.end);
+    others.forEach((seg, i) => {
+      seg.colorIdx = 1 + (i % (PALETTE.length - 1));
+      for (let k = 1; ; k++) {
+        const used = laneUse[k] || (laneUse[k] = []);
+        if (used.every((iv) => seg.start > iv[1] + 1 || seg.end < iv[0] - 1)) {
+          used.push([seg.start, seg.end]);
+          seg.lane = k;
+          break;
+        }
+      }
+    });
+    const laneCount = laneUse.length;
+
+    // ---- nodos ----
+    const nodeList = [];
+    let maxTopChips = 1;
+    commits.forEach((c) => {
+      const nd = info.get(c.sha);
+      nd.lane = nd.seg.lane;
+      nd.chips = chipsFor(c);
+      if (nd.lane === 0) maxTopChips = Math.max(maxTopChips, nd.chips.length);
+    });
+    const top = 34 + CHIP_STEP * maxTopChips;
+    commits.forEach((c) => {
+      const nd = info.get(c.sha);
+      nodeList.push({
+        sha: c.sha,
+        short: c.sha.slice(0, 7),
+        subject: c.subject || '',
+        author: c.author || '',
+        ts: c.ts || 0,
+        parents: c.parents,
+        isMerge: c.parents.length > 1,
+        col: nd.col,
+        lane: nd.lane,
+        x: PAD_LEFT + nd.col * COL_W,
+        y: top + nd.lane * LANE_H,
+        colorIdx: nd.seg.colorIdx,
+        chips: nd.chips,
+        isHead: !!(c.refs || []).some((r) => r.head) || !!c.headDetached,
+      });
+    });
+    const nodeBySha = new Map(nodeList.map((n) => [n.sha, n]));
+
+    // ---- aristas ----
+    const edges = [];
+    nodeList.forEach((child) => {
+      child.parents.forEach((psha, idx) => {
+        const parent = nodeBySha.get(psha);
+        if (!parent) return;
+        let kind = 'same';
+        let colorIdx = child.colorIdx;
+        if (parent.lane !== child.lane) {
+          if (idx === 0) kind = 'fork';
+          else { kind = 'merge'; colorIdx = parent.colorIdx; }
+        }
+        edges.push({ from: psha, to: child.sha, kind, colorIdx });
+      });
+    });
+
+    // ---- cambios sin guardar (carpeta de trabajo) ----
+    let pending = null;
+    const head = opts.headSha ? nodeBySha.get(opts.headSha) : nodeList.find((n) => n.isHead);
+    if (opts.pending && opts.pending.count > 0 && head) {
+      const occupied = nodeList.some((n) => n.lane === head.lane && n.col === head.col + 1);
+      pending = {
+        count: opts.pending.count,
+        staged: opts.pending.staged || 0,
+        conflicts: opts.pending.conflicts || 0,
+        ring: occupied,
+        x: occupied ? head.x : head.x + COL_W,
+        y: head.y,
+        fromSha: head.sha,
+      };
+    }
+
+    const cols = total + (pending && !pending.ring ? 1 : 0);
+    return {
+      empty: false,
+      nodes: nodeList,
+      edges,
+      pending,
+      lanes: laneCount,
+      top,
+      width: PAD_LEFT + (cols - 1) * COL_W + PAD_RIGHT,
+      height: top + (laneCount - 1) * LANE_H + 96,
+      palette: PALETTE,
+      headSha: head ? head.sha : null,
+      trunkName: trunk ? trunk.name : null,
+      segments: segs.map((s) => ({ name: s.name, lane: s.lane, size: s.nodes.length })),
+    };
+  }
+
+  /** Trazado SVG de una arista entre dos nodos ya colocados. */
+  function edgePath(edge, from, to) {
+    const x1 = from.x, y1 = from.y, x2 = to.x, y2 = to.y;
+    if (edge.kind === 'same') return 'M' + x1 + ' ' + y1 + ' L' + x2 + ' ' + y2;
+    const cw = Math.min(54, Math.max(12, x2 - x1));
+    if (edge.kind === 'fork') {
+      return 'M' + x1 + ' ' + y1 + ' C' + (x1 + cw * 0.55) + ' ' + y1 + ' ' + (x1 + cw * 0.45) + ' ' + y2 + ' ' + (x1 + cw) + ' ' + y2 + ' L' + x2 + ' ' + y2;
+    }
+    return 'M' + x1 + ' ' + y1 + ' L' + (x2 - cw) + ' ' + y1 + ' C' + (x2 - cw * 0.45) + ' ' + y1 + ' ' + (x2 - cw * 0.55) + ' ' + y2 + ' ' + x2 + ' ' + y2;
+  }
+
+  return { buildGraph, edgePath, COL_W, LANE_H, PAD_LEFT, NODE_R, CHIP_H, CHIP_STEP, PALETTE };
+});

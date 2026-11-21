@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>GitHelper</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header id="top">
+  <div class="brand" title="GitHelper">
+    <svg viewBox="0 0 32 32" width="30" height="30" aria-hidden="true">
+      <path d="M6 9 H26 M10 9 C14 9 14 23 18 23 H22 C25 23 25 9 26 9" stroke="#58a6ff" stroke-width="3" fill="none" stroke-linecap="round"/>
+      <circle cx="6" cy="9" r="3.6" fill="#58a6ff"/><circle cx="18" cy="23" r="3.6" fill="#f0883e"/>
+      <circle cx="26" cy="9" r="3.6" fill="#3fb950"/>
+    </svg>
+    <span>GitHelper</span>
+  </div>
+
+  <div class="repos">
+    <section class="repo-field" id="remote-field" aria-label="Repositorio de GitHub">
+      <div class="field-top">
+        <label for="remote-url">☁ Repositorio de GitHub <small>(dirección URL)</small></label>
+        <span class="count" id="remote-count"></span>
+      </div>
+      <div class="field-row">
+        <input id="remote-url" type="text" spellcheck="false" autocomplete="off" placeholder="https://github.com/usuario/repositorio">
+        <button id="btn-remote-view" class="btn" title="Ver las ramas de esta dirección (también con Enter), sin guardarla">Ver</button>
+        <button id="btn-remote-save" class="btn primary" title="Guarda esta dirección en la lista de este ordenador para poder volver a ella">💾 Guardar</button>
+        <button id="btn-remote-del" class="btn" title="Quita esta dirección de la lista guardada (no borra nada en GitHub)">🗑 Borrar</button>
+      </div>
+      <div class="field-row nav">
+        <button id="btn-remote-prev" class="btn small" title="Repositorio guardado anterior">‹</button>
+        <select id="remote-list" title="Repositorios de GitHub guardados" aria-label="Repositorios de GitHub guardados"></select>
+        <button id="btn-remote-next" class="btn small" title="Repositorio guardado siguiente">›</button>
+        <button id="btn-remote-web" class="btn small" title="Abrir este repositorio en el navegador">🌐 Abrir web</button>
+      </div>
+      <div class="field-hint" id="remote-hint"></div>
+    </section>
+
+    <section class="repo-field" id="local-field" aria-label="Repositorio local">
+      <div class="field-top">
+        <label for="local-path">📁 Repositorio local <small>(carpeta de tu ordenador)</small></label>
+        <span class="count" id="local-count"></span>
+      </div>
+      <div class="field-row">
+        <input id="local-path" type="text" spellcheck="false" autocomplete="off" placeholder="C:\ruta\de\tu\carpeta">
+        <button id="btn-local-browse" class="btn" title="Elegir la carpeta con el explorador de archivos">Examinar…</button>
+        <button id="btn-local-save" class="btn primary" title="Guarda esta carpeta en la lista de este ordenador para poder volver a ella">💾 Guardar</button>
+        <button id="btn-local-del" class="btn" title="Quita esta carpeta de la lista guardada (no borra nada de tu disco)">🗑 Borrar</button>
+      </div>
+      <div class="field-row nav">
+        <button id="btn-local-prev" class="btn small" title="Carpeta guardada anterior">‹</button>
+        <select id="local-list" title="Carpetas locales guardadas" aria-label="Carpetas locales guardadas"></select>
+        <button id="btn-local-next" class="btn small" title="Carpeta guardada siguiente">›</button>
+        <button id="btn-folder" class="btn small" title="Abrir la carpeta en el Explorador de archivos">📂 Abrir carpeta</button>
+      </div>
+      <div class="field-hint" id="local-hint"></div>
+    </section>
+  </div>
+
+  <div class="tools">
+    <button id="btn-terminal" class="btn" title="Abre una ventana de PowerShell en la carpeta local, para comandos interactivos como «gh auth login»">⌨ Terminal externa</button>
+    <div class="zoom" title="Tamaño del texto: Ctrl y + / − (Ctrl 0 para restablecer)">Texto: Ctrl +/−</div>
+  </div>
+</header>
+
+<main id="layout">
+  <div id="graphs">
+  <section class="gpanel" id="remote-panel" aria-label="Ramas en GitHub">
+    <div class="panel-head">
+      <h2>☁ Ramas en GitHub</h2>
+      <div id="remote-strip" class="strip"></div>
+      <button id="btn-remote-refresh" class="btn small" title="Vuelve a leer GitHub ahora">↻ Actualizar</button>
+    </div>
+    <div class="gscroll" id="remote-scroll"><div class="graph" id="remote-graph"></div></div>
+    <div class="legend" aria-hidden="true">
+      <span><i class="dot"></i> commit</span>
+      <span><i class="dia"></i> fusión</span>
+      <span><i class="ring"></i> rama principal</span>
+    </div>
+  </section>
+
+  <div class="splitter splitter-v" id="split-1" title="Arrastra para cambiar el ancho de cada visualizador"></div>
+
+  <section class="gpanel" id="local-panel" aria-label="Ramas en tu ordenador">
+    <div class="panel-head">
+      <h2>📁 Ramas en tu ordenador</h2>
+      <div id="local-strip" class="strip"></div>
+    </div>
+    <div class="gscroll" id="local-scroll"><div class="graph" id="local-graph"></div></div>
+    <div class="legend" aria-hidden="true">
+      <span><i class="dot"></i> commit</span>
+      <span><i class="dia"></i> fusión</span>
+      <span><i class="ring"></i> estás aquí (HEAD)</span>
+      <span><i class="pend"></i> sin guardar</span>
+    </div>
+  </section>
+  </div>
+
+  <div class="splitter splitter-h" id="split-2" title="Arrastra para cambiar el tamaño"></div>
+
+  <section id="lower">
+    <section id="console-panel" aria-label="Consola">
+      <div class="panel-head">
+        <h2>⌨ Consola</h2>
+        <span class="muted small-note">git · gh · ls cat echo touch mkdir rm pwd — se ejecutan en la carpeta local</span>
+        <button id="btn-clear" class="btn small" title="Limpiar la consola (Ctrl+L)">Limpiar</button>
+      </div>
+      <div id="console-out" tabindex="-1"></div>
+      <div id="console-line">
+        <span id="prompt"></span>
+        <input id="console-in" type="text" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="Escribe un comando de git o gh…  (Enter ejecuta · Tab completa · ↑ historial · Ctrl+C cancela)">
+      </div>
+    </section>
+
+    <div class="splitter splitter-v" id="split-3" title="Arrastra para cambiar el tamaño"></div>
+
+    <aside id="cmds-panel" aria-label="Órdenes de Git y GitHub">
+      <div class="panel-head">
+        <h2>📚 Órdenes de Git y GitHub</h2>
+        <span id="cmds-count" class="muted small-note"></span>
+      </div>
+      <div class="cmds-top">
+        <input id="cmd-search" type="search" spellcheck="false" placeholder="Buscar una orden… (ej.: rama, deshacer, push, pr)">
+        <div class="muted small-note">Pulsa una orden para copiarla en la consola. Lo que va entre &lt; &gt; lo cambias tú.</div>
+      </div>
+      <div id="cmds-list"></div>
+    </aside>
+  </section>
+</main>
+
+<div id="modal" hidden>
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <h3 id="modal-title"></h3>
+    <div id="modal-body"></div>
+    <div class="modal-btns">
+      <button id="modal-cancel" class="btn">Cancelar</button>
+      <button id="modal-ok" class="btn primary">Aceptar</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script src="../shared/ansi.js"></script>
+<script src="../shared/shell.js"></script>
+<script src="../shared/urls.js"></script>
+<script src="../shared/gitparse.js"></script>
+<script src="../shared/graph.js"></script>
+<script src="../shared/commands-data.js"></script>
+<script src="view-graph.js"></script>
+<script src="view-console.js"></script>
+<script src="view-commands.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
