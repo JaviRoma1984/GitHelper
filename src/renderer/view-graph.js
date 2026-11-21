@@ -37,14 +37,29 @@
       '\nClic: pegar «git show ' + n.short + '» en la consola';
   }
 
-  function buildSvg(model, mode) {
+  /** viewW: ancho del dibujo (nunca menos que el del panel, para que la línea de main llegue hasta el borde derecho). */
+  function buildSvg(model, mode, viewW) {
+    const W = Math.max(model.width, viewW || 0);
     const nodes = new Map(model.nodes.map((n) => [n.sha, n]));
     const color = (i) => G.PALETTE[i % G.PALETTE.length];
-    let s = '<svg xmlns="http://www.w3.org/2000/svg" width="' + model.width + '" height="' + model.height + '" viewBox="0 0 ' + model.width + ' ' + model.height + '">';
+    let s = '<svg xmlns="http://www.w3.org/2000/svg" width="' + W + '" height="' + model.height + '" viewBox="0 0 ' + W + ' ' + model.height + '">';
 
     for (let l = 0; l < model.lanes; l++) {
       const y = model.top + l * G.LANE_H;
-      s += '<line class="g-lane" x1="10" y1="' + y + '" x2="' + model.width + '" y2="' + y + '"/>';
+      s += '<line class="g-lane" x1="10" y1="' + y + '" x2="' + W + '" y2="' + y + '"/>';
+    }
+
+    // La rama principal: una línea larga que recorre todo el dibujo, en paralelo al avance de las demás ramas.
+    if (model.rail) {
+      const r = model.rail;
+      const x2 = W - 22;
+      const c = color(r.colorIdx);
+      const behind = r.lastX > r.tipX;
+      s += '<g class="g-rail"><title>' + esc('«' + r.name + '», la rama principal' + (behind ? ': no tiene commits nuevos desde su último punto, pero otras ramas han seguido avanzando' : '')) + '</title>' +
+        '<path class="g-rail-line" d="M' + r.x1 + ' ' + r.y + ' L' + r.tipX + ' ' + r.y + '" stroke="' + c + '"/>' +
+        '<path class="g-rail-ext" d="M' + r.tipX + ' ' + r.y + ' L' + (x2 - 6) + ' ' + r.y + '" stroke="' + c + '"/>' +
+        '<polygon class="g-rail-arrow" points="' + (x2 - 12) + ',' + (r.y - 7) + ' ' + x2 + ',' + r.y + ' ' + (x2 - 12) + ',' + (r.y + 7) + '" fill="' + c + '"/>' +
+        '<text class="g-rail-label" x="' + (x2 - 18) + '" y="' + (r.y - 12) + '" text-anchor="end">' + esc(r.name) + '</text></g>';
     }
 
     model.edges.forEach((e) => {
@@ -107,7 +122,17 @@
       this.mode = o.mode;
       this.handlers = o.handlers || {};
       this.model = null;
+      this.last = null;
+      this.viewW = 0;
       this.lastKey = null;
+      // Si cambia el ancho del panel (ventana o separador), se vuelve a dibujar para que la línea de main siga llegando hasta el borde.
+      if (typeof ResizeObserver === 'function') {
+        new ResizeObserver(() => {
+          if (!this.last || !this.model) return;
+          const w = Math.max(this.model.width, this.scroller.clientWidth - 14);
+          if (Math.abs(w - this.viewW) > 2) this.render(this.last.commits, this.last.opts);
+        }).observe(this.scroller);
+      }
       this.el.addEventListener('click', (e) => {
         const cmd = e.target.closest('[data-cmd]');
         if (cmd) { this.handlers.onCmd && this.handlers.onCmd(cmd.getAttribute('data-cmd')); return; }
@@ -121,17 +146,20 @@
     /** Mensajes (vacío, cargando, error…) en lugar del dibujo. */
     showHtml(html) {
       this.model = null;
+      this.last = null;
       this.lastKey = null;
       this.el.innerHTML = html;
     }
 
     /** @param {object[]} commits  @param {{currentBranch?:string, headSha?:string, pending?:object}} opts */
     render(commits, opts) {
+      this.last = { commits, opts };
       const model = G.buildGraph(commits, opts || {});
       this.model = model;
       const prevLeft = this.scroller.scrollLeft;
       const prevTop = this.scroller.scrollTop;
-      this.el.innerHTML = buildSvg(model, this.mode);
+      this.viewW = Math.max(model.width, this.scroller.clientWidth - 14);
+      this.el.innerHTML = buildSvg(model, this.mode, this.viewW);
       this.scroller.scrollLeft = prevLeft;
       this.scroller.scrollTop = prevTop;
       // Si HEAD ha cambiado (nuevo commit, cambio de rama, otro repositorio), nos aseguramos de que se vea.

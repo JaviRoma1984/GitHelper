@@ -167,6 +167,11 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .graph svg { display: block; }
 .g-lane { stroke: #ffffff10; stroke-width: 1; stroke-dasharray: 4 6; }
 .g-edge { fill: none; stroke-width: 3.2; stroke-linecap: round; }
+/* línea larga de la rama principal: sólida hasta su último commit y, después, más tenue hasta el borde (flecha = «sigue») */
+.g-rail-line, .g-rail-ext { fill: none; stroke-width: 3.2; stroke-linecap: round; }
+.g-rail-ext { opacity: .55; }
+.g-rail-arrow { opacity: .55; }
+.g-rail-label { fill: var(--muted); font: italic 11.5px var(--mono); paint-order: stroke; stroke: var(--bg); stroke-width: 4px; }
 .g-node { cursor: pointer; }
 .g-node:hover .g-shape { filter: brightness(1.25); }
 .g-shape { stroke: var(--bg); stroke-width: 3; }

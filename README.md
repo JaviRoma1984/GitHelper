@@ -21,7 +21,7 @@ Programa de escritorio para Windows que **dibuja las ramas de un repositorio de 
 
 - **Repositorio de GitHub** (arriba a la izquierda): escribe la dirección (`https://github.com/usuario/repositorio`) y pulsa **Ver** para dibujarlo, **Guardar** para dejarlo en la lista o **Borrar** para quitarlo (pide confirmación; no borra nada en GitHub). Con la lista desplegable y las flechas **‹ ›** te mueves entre los repositorios guardados.
 - **Repositorio local** (arriba a la derecha): igual, con una carpeta de tu ordenador (**Examinar…**, **Guardar**, **Borrar**, lista y flechas). Borrar solo la quita de la lista: nunca toca la carpeta ni su contenido.
-- **Los dos dibujos, uno al lado del otro y con el mismo ancho** (el separador de en medio permite cambiarlo; los tamaños se recuerdan): ramas, commits, fusiones (rombos), etiquetas, `HEAD`, cambios sin guardar y las ramas de GitHub tal como las recuerda tu Git (`origin/main`…). Un clic en una rama o en un commit pega el comando correspondiente en la consola.
+- **Los dos dibujos, uno al lado del otro y con el mismo ancho** (el separador de en medio permite cambiarlo; los tamaños se recuerdan): ramas, commits, fusiones (rombos), etiquetas, `HEAD`, cambios sin guardar y las ramas de GitHub tal como las recuerda tu Git (`origin/main`…). **`main` es una línea larga** que recorre todo el dibujo hasta el borde derecho (sólida hasta su último commit y más tenue después, con una flecha), en paralelo a las ramas que siguen avanzando. Un clic en una rama o en un commit pega el comando correspondiente en la consola.
 - **Enlace automático**: al elegir un repositorio de GitHub se abre solo la carpeta guardada cuyo `origin` apunta a él, y al revés. Las etiquetas de la franja local avisan de lo que falta: `↑ 2 por subir`, `↓ 1 por bajar`, `rama sin subir`, `sin GitHub enlazado`…
 - **Consola**: ejecuta `git` y `gh` de verdad en la carpeta local (sin shell: no hay `|` ni `;`; se puede encadenar con `&&`), más los ayudantes `ls`, `cat`, `echo "texto" > archivo`, `touch`, `mkdir`, `rm`, `pwd`. Historial con ↑ ↓, Tab completa subcomandos y ramas, Ctrl+C cancela. Al terminar cada comando se actualiza el dibujo local; tras un `git push` o un comando `gh` se vuelve a leer también GitHub.
 - **Órdenes de Git y GitHub** (a la derecha de la consola): 324 órdenes agrupadas en secciones desplegables, cada una con su explicación y avisos en las peligrosas, y un buscador. Pulsar una la copia en la consola con el primer `<hueco>` seleccionado para escribir encima; tú decides cuándo darle a Enter.
@@ -59,8 +59,8 @@ Desinstalar: `scripts\desinstalar.ps1` (con `-BorrarAjustes` también borra `%AP
 | Comando | Qué hace |
 |---|---|
 | `npm start` | Abre GitHelper desde el código |
-| `npm test` | 19 pruebas (URLs, consola, dibujo de ramas, lista de órdenes, git de verdad en carpetas temporales) |
-| `npm run e2e` | Prueba de extremo a extremo: abre la aplicación, la maneja como una persona y saca capturas (97 comprobaciones; `--exe <ruta>` la prueba sobre el programa instalado, `--out` elige la carpeta de capturas) |
+| `npm test` | 20 pruebas (URLs, consola, dibujo de ramas, lista de órdenes, git de verdad en carpetas temporales) |
+| `npm run e2e` | Prueba de extremo a extremo: abre la aplicación, la maneja como una persona y saca capturas (102 comprobaciones; `--exe <ruta>` la prueba sobre el programa instalado, `--out` elige la carpeta de capturas) |
 | `npm run icono` | Regenera `build\icon.ico` y `icon.png` |
 
 Las pruebas usan carpetas temporales y un «GitHub» que es un repositorio desnudo local: no tocan internet, ni tus carpetas, ni tus datos.
@@ -83,7 +83,8 @@ Norma de trabajo: ✅ solo cuando lo ha comprobado la persona que usa el program
 | F8 | Enlace automático carpeta ↔ repositorio por su `origin` y etiquetas de estado | 🟡 |
 | F9 | Empaquetado, instalación y prueba sobre el `.exe` instalado | 🟡 |
 | F10 | Uso real con tu cuenta: `push`/`pull`, repositorios privados, `gh auth login` | ⬜ sin probar (no se han usado tus credenciales) |
-| F11 | Subir el código a GitHub | ⬜ pendiente de tu OK |
+| F11 | Subir el código a GitHub | 🟡 subido |
+| F12 | Línea larga de `main` que recorre el dibujo en paralelo a las ramas que siguen avanzando | 🟡 |
 
 ## Licencia
 

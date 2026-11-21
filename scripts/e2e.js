@@ -175,6 +175,17 @@ exports.run = async function run({ win, app, getCwd, getData, dataFile, cacheRoo
     check('la dirección queda guardada en el archivo de datos', readData().repos.length === 1 && readData().repos[0].url === p1.bare, JSON.stringify(readData().repos));
     check('la lista desplegable ya tiene 1 repositorio y el campo dice «guardado»', (await $options('remote-list')).length === 1 && (await $text('#remote-hint')).includes('Guardado'), JSON.stringify(await $options('remote-list')) + await $text('#remote-hint'));
     check('la franja de GitHub resume ramas y commits', /2 ramas/.test(await strip('remote-strip')) && /4 commits/.test(await strip('remote-strip')), await strip('remote-strip'));
+    const railInfo = (graphId) => exec(`(() => {
+      const g = document.querySelector('#${graphId} .g-rail'); if (!g) return null;
+      const ext = g.querySelector('.g-rail-ext').getAttribute('d'); const x2 = parseFloat(ext.split('L')[1]);
+      const xs = Array.from(document.querySelectorAll('#${graphId} .g-shape')).map((e) => parseFloat(e.getAttribute('cx') || e.getAttribute('points').split(',')[0]));
+      const svg = document.querySelector('#${graphId} svg').getBoundingClientRect().width;
+      const panel = document.getElementById('${graphId.replace('graph', 'scroll')}').clientWidth;
+      return { x2, maxNode: Math.max.apply(null, xs), svg, panel, label: g.querySelector('.g-rail-label').textContent, title: g.querySelector('title').textContent };
+    })()`);
+    const ri = await railInfo('remote-graph');
+    check('main se dibuja como una línea larga que sigue más allá de su último commit', ri && ri.label === 'main' && ri.x2 > ri.maxNode + 40, JSON.stringify(ri));
+    check('y esa línea llega hasta el borde derecho del panel', ri && ri.svg >= ri.panel - 16, JSON.stringify(ri));
     check('el repositorio no aparece como carpeta de trabajo (solo hay copia desnuda en los datos del programa)', fs.readdirSync(cacheRoot()).length === 1, fs.readdirSync(cacheRoot()).join(','));
     await shot('02-github');
 
@@ -209,6 +220,10 @@ exports.run = async function run({ win, app, getCwd, getData, dataFile, cacheRoo
     await run('git push -u origin prueba');
     check('tras subir, el dibujo de GitHub se actualiza solo con la rama nueva', await waitFor(async () => (await nodes('remote-graph')) === 5 && (await chips('remote-graph')).includes('prueba'), 20000), JSON.stringify(await chips('remote-graph')) + ' nodos: ' + await nodes('remote-graph'));
     check('y la copia local recuerda origin/prueba', await waitFor(async () => (await chips('local-graph')).includes('origin/prueba')), JSON.stringify(await chips('local-graph')));
+    const rp = await railInfo('remote-graph');
+    check('con una rama más avanzada que main, la línea de main sigue en paralelo y lo explica', rp && rp.x2 > rp.maxNode && rp.title.includes('otras ramas han seguido avanzando'), JSON.stringify(rp));
+    const rl2 = await railInfo('local-graph');
+    check('el visualizador local también dibuja la línea larga de main', rl2 && rl2.label === 'main' && rl2.x2 > rl2.maxNode, JSON.stringify(rl2));
     check('de verdad llegó al «GitHub» de la prueba', git(p1.work, '-C', p1.bare, 'log', '-1', '--format=%s', 'prueba').trim() === 'Commit desde la consola', '');
     check('la consola enseñó la salida del push', /prueba/.test(await consoleText()), '');
     await shot('05-subido');
@@ -328,6 +343,9 @@ exports.run = async function run({ win, app, getCwd, getData, dataFile, cacheRoo
     const after = await rect('remote-panel');
     const afterLocal = await rect('local-panel');
     check('arrastrar el separador de en medio cambia el ancho de cada visualizador', after.w > before.w + 80 && afterLocal.w < beforeLocal.w - 80, JSON.stringify({ before: before.w, after: after.w, local: afterLocal.w }));
+    const rw = await railInfo('remote-graph');
+    const rwl = await railInfo('local-graph');
+    check('al cambiar el ancho de los paneles, la línea de main se reajusta hasta el borde de cada uno', rw && rwl && rw.svg >= rw.panel - 16 && rwl.svg >= rwl.panel - 16, JSON.stringify({ remoto: rw && [rw.svg, rw.panel], local: rwl && [rwl.svg, rwl.panel] }));
     await shot('10b-ancho-cambiado');
     await exec(`(() => { const h = document.getElementById('split-2'); const r = h.getBoundingClientRect();
       h.dispatchEvent(new MouseEvent('mousedown', {bubbles:true, clientX: r.x+20, clientY: r.y+2}));

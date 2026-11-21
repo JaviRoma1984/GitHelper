@@ -208,11 +208,29 @@
       };
     }
 
+    // ---- raíl de la rama principal ----
+    // «main» se dibuja como una línea larga que sigue de largo (en el carril de arriba) mientras las demás ramas avanzan en paralelo,
+    // aunque main no tenga commits nuevos: así se ve de un vistazo cuánto se han alejado las ramas del tronco.
+    let rail = null;
+    // Solo si de verdad es la rama principal (main/master/…) o la rama actual: no se le pone el raíl a una rama cualquiera por orden alfabético.
+    if (trunk && (TRUNK_NAMES.indexOf(trunk.name) >= 0 || trunk.name === opts.currentBranch)) {
+      const onTrunk = nodeList.filter((n) => n.lane === 0);
+      rail = {
+        name: trunk.name,
+        y: top,
+        x1: Math.min.apply(null, onTrunk.map((n) => n.x)),
+        tipX: Math.max.apply(null, onTrunk.map((n) => n.x)), // donde está el último commit de main
+        lastX: Math.max.apply(null, nodeList.map((n) => n.x)), // donde llega la rama más avanzada
+        colorIdx: 0,
+      };
+    }
+
     const cols = total + (pending && !pending.ring ? 1 : 0);
     return {
       empty: false,
       nodes: nodeList,
       edges,
+      rail,
       pending,
       lanes: laneCount,
       top,

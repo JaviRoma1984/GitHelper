@@ -105,6 +105,32 @@ test('graph: sin commits y con cambios sin guardar', () => {
   assert.equal(g.pending.count, 2);
 });
 
+test('graph: main es una línea larga que sigue de largo mientras otra rama avanza en paralelo', () => {
+  const commits = [
+    { sha: 'd3', parents: ['d2'], subject: 'dev 3', refs: [{ type: 'branch', name: 'dev', head: true }] },
+    { sha: 'd2', parents: ['d1'], subject: 'dev 2', refs: [] },
+    { sha: 'd1', parents: ['m2'], subject: 'dev 1', refs: [] },
+    { sha: 'm2', parents: ['m1'], subject: 'main 2', refs: [{ type: 'branch', name: 'main' }] },
+    { sha: 'm1', parents: [], subject: 'inicio', refs: [] },
+  ];
+  const g = G.buildGraph(commits, { currentBranch: 'dev', headSha: 'd3' });
+  const by = Object.fromEntries(g.nodes.map((n) => [n.sha, n]));
+  assert.ok(g.rail, 'debe haber raíl de la rama principal');
+  assert.equal(g.rail.name, 'main');
+  assert.equal(g.rail.y, g.top, 'va en el carril de arriba');
+  assert.equal(g.rail.x1, by.m1.x, 'empieza en el primer commit de main');
+  assert.equal(g.rail.tipX, by.m2.x, 'el tramo sólido acaba en el último commit de main');
+  assert.equal(g.rail.lastX, by.d3.x, 'y la línea sigue hasta donde llega la rama más avanzada');
+  assert.ok(g.rail.lastX > g.rail.tipX);
+  assert.ok(by.d3.lane > 0 && by.m2.lane === 0);
+  // sin rama principal con nombre, no se inventa un raíl para una rama cualquiera
+  const solo = G.buildGraph([
+    { sha: 'b2', parents: ['b1'], subject: 'x', refs: [{ type: 'branch', name: 'zeta' }] },
+    { sha: 'b1', parents: [], subject: 'y', refs: [{ type: 'branch', name: 'alfa' }] },
+  ], {});
+  assert.equal(solo.rail, null);
+});
+
 // ---------- lista de órdenes ----------
 test('órdenes: datos completos y sin duplicados dentro de cada sección', () => {
   assert.ok(Cmds.total() >= 300, 'esperaba al menos 300 órdenes, hay ' + Cmds.total());
