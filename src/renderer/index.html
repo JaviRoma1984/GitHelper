@@ -20,46 +20,26 @@
     <span>GitHelper</span>
   </div>
 
-  <div class="repos">
-    <section class="repo-field" id="remote-field" aria-label="Repositorio de GitHub">
-      <div class="field-top">
-        <label for="remote-url">☁ Repositorio de GitHub <small>(dirección URL)</small></label>
-        <span class="count" id="remote-count"></span>
+  <div class="pcol">
+    <div class="pbar">
+      <span class="pb-label">Proyectos activos:</span>
+      <button id="btn-project-prev" class="btn small" title="Proyecto anterior">‹</button>
+      <div class="pm-wrap">
+        <button id="project-btn" class="btn pm-btn" type="button" aria-haspopup="true" aria-expanded="false" title="Elige un proyecto, agrega uno nuevo o bórralo">
+          <span id="project-btn-label">— elige un proyecto —</span><span class="pm-caret">▾</span>
+        </button>
+        <div id="project-menu" class="pm-menu" hidden>
+          <div id="project-items"></div>
+          <button id="btn-project-new" class="pm-add" type="button">＋ Agregar proyecto</button>
+        </div>
       </div>
-      <div class="field-row">
-        <input id="remote-url" type="text" spellcheck="false" autocomplete="off" placeholder="https://github.com/usuario/repositorio">
-        <button id="btn-remote-view" class="btn" title="Ver las ramas de esta dirección (también con Enter), sin guardarla">Ver</button>
-        <button id="btn-remote-save" class="btn primary" title="Guarda esta dirección en la lista de este ordenador para poder volver a ella">💾 Guardar</button>
-        <button id="btn-remote-del" class="btn" title="Quita esta dirección de la lista guardada (no borra nada en GitHub)">🗑 Borrar</button>
-      </div>
-      <div class="field-row nav">
-        <button id="btn-remote-prev" class="btn small" title="Repositorio guardado anterior">‹</button>
-        <select id="remote-list" title="Repositorios de GitHub guardados" aria-label="Repositorios de GitHub guardados"></select>
-        <button id="btn-remote-next" class="btn small" title="Repositorio guardado siguiente">›</button>
-        <button id="btn-remote-web" class="btn small" title="Abrir este repositorio en el navegador">🌐 Abrir web</button>
-      </div>
-      <div class="field-hint" id="remote-hint"></div>
-    </section>
-
-    <section class="repo-field" id="local-field" aria-label="Repositorio local">
-      <div class="field-top">
-        <label for="local-path">📁 Repositorio local <small>(carpeta de tu ordenador)</small></label>
-        <span class="count" id="local-count"></span>
-      </div>
-      <div class="field-row">
-        <input id="local-path" type="text" spellcheck="false" autocomplete="off" placeholder="C:\ruta\de\tu\carpeta">
-        <button id="btn-local-browse" class="btn" title="Elegir la carpeta con el explorador de archivos">Examinar…</button>
-        <button id="btn-local-save" class="btn primary" title="Guarda esta carpeta en la lista de este ordenador para poder volver a ella">💾 Guardar</button>
-        <button id="btn-local-del" class="btn" title="Quita esta carpeta de la lista guardada (no borra nada de tu disco)">🗑 Borrar</button>
-      </div>
-      <div class="field-row nav">
-        <button id="btn-local-prev" class="btn small" title="Carpeta guardada anterior">‹</button>
-        <select id="local-list" title="Carpetas locales guardadas" aria-label="Carpetas locales guardadas"></select>
-        <button id="btn-local-next" class="btn small" title="Carpeta guardada siguiente">›</button>
-        <button id="btn-folder" class="btn small" title="Abrir la carpeta en el Explorador de archivos">📂 Abrir carpeta</button>
-      </div>
-      <div class="field-hint" id="local-hint"></div>
-    </section>
+      <button id="btn-project-next" class="btn small" title="Proyecto siguiente">›</button>
+      <span id="project-count" class="count"></span>
+    </div>
+    <div class="pinfo" id="project-info">
+      <span class="pi-item">☁ <span id="pi-url" class="pi-text">—</span> <button id="btn-remote-web" class="btn small" title="Abrir el repositorio de GitHub de este proyecto en el navegador">🌐 Abrir web</button></span>
+      <span class="pi-item">📁 <span id="pi-path" class="pi-text">—</span> <button id="btn-folder" class="btn small" title="Abrir la carpeta local de este proyecto en el Explorador de archivos">📂 Abrir carpeta</button></span>
+    </div>
   </div>
 
   <div class="tools">
@@ -109,7 +89,7 @@
     <section id="console-panel" aria-label="Consola">
       <div class="panel-head">
         <h2>⌨ Consola</h2>
-        <span class="muted small-note">git · gh · ls cat echo touch mkdir rm pwd — se ejecutan en la carpeta local</span>
+        <span class="muted small-note">git · gh · ls cat echo touch mkdir rm pwd — se ejecutan en la carpeta local del proyecto activo</span>
         <button id="btn-clear" class="btn small" title="Limpiar la consola (Ctrl+L)">Limpiar</button>
       </div>
       <div id="console-out" tabindex="-1"></div>
@@ -134,6 +114,28 @@
     </aside>
   </section>
 </main>
+
+<div id="pform" class="overlay" hidden>
+  <form id="pform-card" class="modal-card form-card" role="dialog" aria-modal="true" aria-labelledby="pf-title" novalidate>
+    <h3 id="pf-title">Nuevo proyecto</h3>
+    <p class="muted small-note">Un proyecto junta, con un nombre, el repositorio de GitHub donde vive y la carpeta de tu ordenador donde lo tienes. Al elegirlo, GitHelper ya sabe cuál es cada uno.</p>
+    <label class="f-label" for="pf-name">Nombre del proyecto</label>
+    <input id="pf-name" type="text" spellcheck="false" autocomplete="off" maxlength="60" placeholder="Mi proyecto">
+    <label class="f-label" for="pf-url">☁ Dirección de GitHub (URL)</label>
+    <input id="pf-url" type="text" spellcheck="false" autocomplete="off" placeholder="https://github.com/usuario/repositorio">
+    <label class="f-label" for="pf-local">📁 Carpeta local (donde vive en tu ordenador)</label>
+    <div class="f-row">
+      <input id="pf-local" type="text" spellcheck="false" autocomplete="off" placeholder="C:\ruta\de\tu\carpeta">
+      <button id="pf-browse" type="button" class="btn" title="Elegir la carpeta con el explorador de archivos">Examinar…</button>
+    </div>
+    <div id="pf-note" class="muted small-note"></div>
+    <div id="pf-error" class="error-text" role="alert"></div>
+    <div class="modal-btns">
+      <button id="pf-cancel" type="button" class="btn">Cancelar</button>
+      <button id="pf-save" type="submit" class="btn primary">💾 Guardar proyecto</button>
+    </div>
+  </form>
+</div>
 
 <div id="modal" hidden>
   <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title">

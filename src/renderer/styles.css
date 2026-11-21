@@ -53,51 +53,64 @@ h2 { font-size: 13px; margin: 0; font-weight: 600; letter-spacing: .02em; white-
 .btn.small { padding: 3px 9px; font-size: 12.5px; }
 button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
-/* ---------- cabecera con los dos repositorios ---------- */
+/* ---------- cabecera: proyectos activos ---------- */
 #top {
   display: flex;
-  gap: 14px;
-  align-items: flex-start;
-  padding: 8px 12px 4px;
+  gap: 16px;
+  align-items: center;
+  padding: 8px 12px;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
 }
-.brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 17px; flex: none; padding-top: 2px; }
-.repos { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 16px; min-width: 0; }
-.repo-field { min-width: 0; }
-.field-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 3px; }
-.repo-field label { display: block; font-size: 12.5px; font-weight: 600; }
-.repo-field label small { color: var(--muted); font-weight: 400; }
-.field-top .count { font-size: 11.5px; color: var(--muted); }
-.field-row { display: flex; gap: 5px; margin-bottom: 4px; }
-.field-row input {
-  flex: 1;
-  min-width: 0;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 5px 9px;
-  font-family: var(--mono);
-  font-size: 13px;
+.brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 17px; flex: none; }
+.pcol { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.pbar { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.pb-label { font-weight: 700; font-size: 14.5px; white-space: nowrap; }
+.pbar .count { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.pm-wrap { position: relative; min-width: 0; }
+.pm-btn { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 280px; max-width: 46vw; font-weight: 600; font-size: 14px; padding: 6px 12px; border-color: #484f58; }
+.pm-btn span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pm-caret { color: var(--muted); flex: none; }
+.pm-btn[aria-expanded="true"] { border-color: var(--accent); }
+.pm-menu {
+  position: absolute; top: calc(100% + 5px); left: 0; z-index: 60;
+  min-width: 460px; max-width: min(720px, 80vw); max-height: 60vh; overflow-y: auto;
+  background: var(--panel2); border: 1px solid #484f58; border-radius: 10px; padding: 5px;
+  box-shadow: 0 12px 36px #000b;
 }
-.field-row input:focus { border-color: var(--accent); }
-.field-row select {
-  flex: 1;
-  min-width: 0;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 3px 6px;
-  font-size: 13px;
-  cursor: pointer;
-}
-.field-row select:disabled { opacity: .55; cursor: default; }
-.field-hint { min-height: 17px; font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.field-hint.ok { color: var(--green); }
-.field-hint.warn { color: var(--yellow); }
-.field-hint.err { color: var(--red); }
-.tools { display: flex; flex-direction: column; gap: 5px; align-items: flex-end; flex: none; padding-top: 18px; }
+.pm-menu[hidden] { display: none; }
+.pm-item { display: flex; align-items: center; gap: 2px; border-radius: 7px; }
+.pm-item:hover { background: #ffffff0f; }
+.pm-item.sel { background: #1f6feb26; box-shadow: inset 3px 0 0 var(--accent); }
+.pm-pick { flex: 1; min-width: 0; text-align: left; background: none; border: 0; padding: 7px 10px; cursor: pointer; }
+.pm-name { display: block; font-weight: 600; }
+.pm-sub { display: block; margin-top: 1px; font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pm-act { flex: none; background: none; border: 0; cursor: pointer; padding: 6px 9px; border-radius: 6px; color: var(--muted); font-size: 14px; }
+.pm-act:hover { background: #ffffff1c; color: var(--text); }
+.pm-del:hover { background: #da363340; color: #ffa198; }
+.pm-add { display: block; width: 100%; margin-top: 5px; padding: 9px 12px; text-align: left; background: #1f6feb; border: 0; border-radius: 7px; color: #fff; font-weight: 600; cursor: pointer; }
+.pm-add:hover { background: #388bfd; }
+.pm-empty { padding: 10px 12px 6px; color: var(--muted); font-size: 13px; }
+.pinfo { display: flex; align-items: center; gap: 22px; min-width: 0; font-size: 12.5px; color: var(--muted); }
+.pi-item { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.pi-text { font-family: var(--mono); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 34vw; }
+.pi-text.missing { color: var(--yellow); font-family: var(--sans); font-style: italic; }
+.tools { display: flex; flex-direction: column; gap: 4px; align-items: flex-end; flex: none; }
 .tools .zoom { font-size: 11px; color: var(--muted); }
+
+/* ---------- formulario de proyecto ---------- */
+.overlay { position: fixed; inset: 0; background: #010409b8; display: flex; align-items: center; justify-content: center; z-index: 90; }
+.overlay[hidden] { display: none; }
+.form-card { width: min(580px, 94vw); }
+.form-card p { margin: 0 0 6px; }
+.f-label { display: block; margin: 10px 0 4px; font-size: 12.5px; font-weight: 600; }
+.form-card input[type="text"] { width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px; font-family: var(--mono); font-size: 13px; }
+.form-card input[type="text"]:focus { border-color: var(--accent); }
+.f-row { display: flex; gap: 6px; }
+.f-row input { flex: 1; min-width: 0; }
+#pf-note { min-height: 16px; margin-top: 5px; }
+#pf-error { min-height: 18px; margin-top: 4px; }
+.error-text { color: var(--red); font-size: 12.5px; }
 
 /* ---------- cuadro de confirmación ---------- */
 #modal { position: fixed; inset: 0; background: #010409b8; display: flex; align-items: center; justify-content: center; z-index: 100; }
@@ -172,6 +185,11 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .g-rail-ext { opacity: .55; }
 .g-rail-arrow { opacity: .55; }
 .g-rail-label { fill: var(--muted); font: italic 600 12.5px var(--mono); paint-order: stroke; stroke: var(--bg); stroke-width: 4px; }
+/* «estás aquí»: flecha de abajo hacia arriba, con el color de la rama (--c) */
+.g-here-stem, .g-here-head { fill: var(--c); stroke: var(--bg); stroke-width: 1.8; stroke-linejoin: round; }
+.g-here-label { fill: var(--c); font: 700 13px var(--sans); paint-order: stroke; stroke: var(--bg); stroke-width: 4.5px; stroke-linejoin: round; }
+.g-rail.here .g-rail-line, .g-rail.here .g-rail-ext { stroke-width: 5; }
+.g-rail.here .g-rail-ext { opacity: .8; }
 /* marca de push (subida a GitHub) */
 .g-push { cursor: help; }
 .g-push circle { fill: #238636; stroke: var(--bg); stroke-width: 2.5; }

@@ -37,6 +37,8 @@
       '\nClic: pegar «git show ' + n.short + '» en la consola';
   }
 
+  const HERE_PAD = G.HERE_PAD; // cuánto baja el texto del commit donde se está, para dejar sitio a la flecha y a su «Posición actual»
+
   /** viewW: ancho del dibujo (nunca menos que el del panel, para que la línea de main llegue hasta el borde derecho). */
   function buildSvg(model, mode, viewW) {
     const W = Math.max(model.width, viewW || 0);
@@ -50,6 +52,8 @@
       const idx = bc[local] !== undefined ? bc[local] : bc[chip.name];
       return color(idx !== undefined ? idx : n.colorIdx);
     };
+    // La rama en la que se está: su línea se dibuja más gruesa.
+    const isHereBranch = (name) => !!(model.here && model.here.branch && model.here.branch === name);
     let s = '<svg xmlns="http://www.w3.org/2000/svg" width="' + W + '" height="' + model.height + '" viewBox="0 0 ' + W + ' ' + model.height + '">';
 
     for (let l = 0; l < model.lanes; l++) {
@@ -63,7 +67,7 @@
       const x2 = W - 22;
       const c = color(r.colorIdx);
       const behind = r.lastX > r.tipX;
-      s += '<g class="g-rail" data-branch="' + esc(r.name) + '"><title>' + esc('«' + r.name + '», la rama principal' + (behind ? ': no tiene commits nuevos desde su último punto, pero otras ramas han seguido avanzando' : '')) + '</title>' +
+      s += '<g class="g-rail' + (isHereBranch(r.name) ? ' here' : '') + '" data-branch="' + esc(r.name) + '"><title>' + esc('«' + r.name + '», la rama principal' + (behind ? ': no tiene commits nuevos desde su último punto, pero otras ramas han seguido avanzando' : '')) + '</title>' +
         '<path class="g-rail-line" d="M' + r.x1 + ' ' + r.y + ' L' + r.tipX + ' ' + r.y + '" stroke="' + c + '"/>' +
         '<path class="g-rail-ext" d="M' + r.tipX + ' ' + r.y + ' L' + (x2 - 6) + ' ' + r.y + '" stroke="' + c + '"/>' +
         '<polygon class="g-rail-arrow" points="' + (x2 - 12) + ',' + (r.y - 7) + ' ' + x2 + ',' + r.y + ' ' + (x2 - 12) + ',' + (r.y + 7) + '" fill="' + c + '"/>' +
@@ -77,7 +81,7 @@
       const tip = r.virtual
         ? 'Rama «' + r.name + '»: todavía no tiene commits propios (apunta al mismo commit que otra rama), pero sigue ahí, en paralelo'
         : 'Rama «' + r.name + '»: sigue en paralelo al resto';
-      s += '<g class="g-rail g-rail-branch' + (r.virtual ? ' virtual' : '') + '" data-branch="' + esc(r.name) + '"><title>' + esc(tip) + '</title>';
+      s += '<g class="g-rail g-rail-branch' + (r.virtual ? ' virtual' : '') + (isHereBranch(r.name) ? ' here' : '') + '" data-branch="' + esc(r.name) + '"><title>' + esc(tip) + '</title>';
       if (r.virtual) s += '<path class="g-edge" d="' + G.edgePath({ kind: 'fork' }, r.anchor, { x: r.tipX, y: r.y }) + '" stroke="' + c + '"/>';
       s += '<path class="g-rail-ext" d="M' + r.tipX + ' ' + r.y + ' L' + (x2 - 6) + ' ' + r.y + '" stroke="' + c + '"/>' +
         '<polygon class="g-rail-arrow" points="' + (x2 - 12) + ',' + (r.y - 7) + ' ' + x2 + ',' + r.y + ' ' + (x2 - 12) + ',' + (r.y + 7) + '" fill="' + c + '"/>' +
@@ -117,8 +121,10 @@
         s += '<circle class="g-shape" fill="' + c + '" cx="' + n.x + '" cy="' + n.y + '" r="' + G.NODE_R + '"/>';
       }
       if (n.isHead) s += '<circle class="g-head-ring" cx="' + n.x + '" cy="' + n.y + '" r="' + (n.isMerge ? 17 : 15) + '"/>';
-      s += '<text class="g-sha" x="' + n.x + '" y="' + (n.y + 30) + '" text-anchor="middle">' + esc(n.short) + '</text>';
-      s += '<text class="g-msg" x="' + n.x + '" y="' + (n.y + 45) + '" text-anchor="middle">' + esc(truncate(n.subject, 14)) + '</text>';
+      // En el commit donde se está, el texto baja para dejar sitio a la flecha de «estás aquí».
+      const dy = model.here && model.here.sha === n.sha ? HERE_PAD : 0;
+      s += '<text class="g-sha" x="' + n.x + '" y="' + (n.y + 30 + dy) + '" text-anchor="middle">' + esc(n.short) + '</text>';
+      s += '<text class="g-msg" x="' + n.x + '" y="' + (n.y + 45 + dy) + '" text-anchor="middle">' + esc(truncate(n.subject, 14)) + '</text>';
       s += '</g>';
     });
 
@@ -133,6 +139,23 @@
           '<text y="1" text-anchor="middle" dominant-baseline="central">' + esc(chip.label) + '</text></g>';
       });
     });
+    // «Estás aquí»: una flecha de abajo hacia arriba, desde debajo del commit donde se está trabajando, con el color de SU rama.
+    if (model.here) {
+      const h = model.here;
+      const hn = nodes.get(h.sha);
+      const idx = h.branch && bc[h.branch] !== undefined ? bc[h.branch] : (hn ? hn.colorIdx : 0);
+      const c = color(idx);
+      const tipY = h.y + 19;
+      // El texto va debajo de la flecha, centrado. Si el commit exacto no está en el dibujo (aún sin subir a GitHub), se dice hasta dónde llega la rama.
+      const label = h.exact ? 'Posición actual' : 'Tu rama llega hasta aquí';
+      const tip = h.exact
+        ? 'Estás aquí' + (h.branch ? ', trabajando en la rama «' + h.branch + '»' : '') + (mode === 'remote' ? ' (según tu carpeta local)' : '')
+        : 'Tu rama «' + h.branch + '» llega hasta este punto en GitHub; tu carpeta local tiene commits más nuevos que aún no has subido';
+      s += '<g class="g-here" style="--c:' + c + '"><title>' + esc(tip) + '</title>' +
+        '<rect class="g-here-stem" x="' + (h.x - 2.5) + '" y="' + (tipY + 11) + '" width="5" height="26" rx="2"/>' +
+        '<polygon class="g-here-head" points="' + (h.x - 9) + ',' + (tipY + 13) + ' ' + h.x + ',' + tipY + ' ' + (h.x + 9) + ',' + (tipY + 13) + '"/>' +
+        '<text class="g-here-label" x="' + h.x + '" y="' + (tipY + 55) + '" text-anchor="middle">' + esc(label) + '</text></g>';
+    }
     // Marcas de push: una chapa verde con una flecha hacia arriba junto al commit que quedó como punta de la rama al subirla a GitHub.
     (model.pushMarks || []).forEach((m, i) => {
       const cx = m.x + 28; // a la derecha del punto, sobre su línea (así no tapa las etiquetas de rama que van encima)
@@ -202,11 +225,7 @@
       this.lastKey = null;
       // Si cambia el ancho del panel (ventana o separador), se vuelve a dibujar para que la línea de main siga llegando hasta el borde.
       if (typeof ResizeObserver === 'function') {
-        new ResizeObserver(() => {
-          if (!this.last || !this.model) return;
-          const w = Math.max(this.model.width, this.scroller.clientWidth - 14);
-          if (Math.abs(w - this.viewW) > 2) this.render(this.last.commits, this.last.opts);
-        }).observe(this.scroller);
+        new ResizeObserver(() => this.fit()).observe(this.scroller);
       }
       this.el.addEventListener('click', (e) => {
         const cmd = e.target.closest('[data-cmd]');
@@ -224,6 +243,13 @@
       });
       this.el.addEventListener('mousemove', moveTip);
       this.el.addEventListener('mouseout', (e) => { if (e.target.closest && e.target.closest('.g-push')) hideTip(); });
+    }
+
+    /** Ajusta el ancho del dibujo al del panel (para que la línea de main llegue siempre hasta el borde derecho). */
+    fit() {
+      if (!this.last || !this.model) return;
+      const w = Math.max(this.model.width, this.scroller.clientWidth - 14);
+      if (Math.abs(w - this.viewW) > 2) this.render(this.last.commits, this.last.opts);
     }
 
     /** Mensajes (vacío, cargando, error…) en lugar del dibujo. */
@@ -264,7 +290,8 @@
       const targetX = (pending && !pending.ring ? pending.x : node.x);
       s.scrollLeft = Math.max(0, targetX - s.clientWidth * 0.65);
       // Se mira desde arriba (así main y las primeras ramas siguen a la vista) y solo se baja lo justo para ver el punto y su texto.
-      s.scrollTop = Math.max(0, node.y + 70 - s.clientHeight);
+      const extra = this.model && this.model.here && this.model.here.sha === node.sha ? G.HERE_PAD : 0; // la flecha y su texto van debajo del commit
+      s.scrollTop = Math.max(0, node.y + 70 + extra - s.clientHeight);
     }
   }
 

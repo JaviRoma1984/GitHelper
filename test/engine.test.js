@@ -209,31 +209,98 @@ test('consola: ejecuta git y los ayudantes en la carpeta local', { skip: !HAS_GI
   assert.ok(fs.existsSync(path.join(w.work, '.git')));
 });
 
-test('almacén: guarda, ordena, deduplica y descarta lo inválido', () => {
+test('almacén: guarda proyectos, deduplica nombres y descarta lo inválido', () => {
   const file = path.join(tmp, 'datos.json');
   assert.deepEqual(Store.load(file, OPTS), Store.empty());
+  assert.equal(Store.empty().version, 2);
   const d = Store.empty();
-  d.repos.push({ url: 'https://github.com/octo/hello' });
-  d.locals.push({ path: 'C:\\Proyectos\\Hello' });
-  d.selected = { repo: 'https://github.com/octo/hello', local: 'C:\\Proyectos\\Hello' };
+  d.projects.push({ id: 'abc123def456', name: 'Mi proyecto', url: 'https://github.com/octo/hello', local: 'C:\\Proyectos\\Hello', savedAt: '2026-11-21T10:00:00.000Z' });
+  d.selected.project = 'abc123def456';
   Store.save(file, d);
   const back = Store.load(file, OPTS);
-  assert.equal(back.repos.length, 1);
-  assert.equal(back.selected.repo, 'https://github.com/octo/hello');
-  assert.equal(Store.indexOfRepo(back, 'git@github.com:Octo/Hello.git', OPTS), 0);
-  assert.equal(Store.indexOfLocal(back, 'c:\\proyectos\\hello\\'), process.platform === 'win32' ? 0 : -1);
+  assert.equal(back.projects.length, 1);
+  assert.deepEqual(back.projects[0], d.projects[0]);
+  assert.equal(back.selected.project, 'abc123def456');
+  assert.equal(Store.byId(back, 'abc123def456').name, 'Mi proyecto');
+  assert.equal(Store.byId(back, 'nope'), null);
 
-  // archivo estropeado o con direcciones peligrosas
+  // archivo estropeado, con direcciones peligrosas, nombres repetidos o proyectos sin nada
   fs.writeFileSync(file, JSON.stringify({
-    repos: [{ url: '--upload-pack=calc' }, { url: 'https://github.com/octo/hello' }, { url: 'https://github.com/octo/hello.git' }, { nada: 1 }, null],
-    locals: [{ path: '' }, { path: 'C:\\A' }, { path: 'c:\\a' }],
-    selected: { repo: 'https://github.com/otro/otro', local: 'C:\\no\\guardada' },
+    version: 2,
+    projects: [
+      { id: 'aaaa1111', name: 'Uno', url: 'https://github.com/octo/hello.git', local: '' },
+      { id: 'aaaa1111', name: 'uno', url: '', local: 'C:\\Otra' }, // mismo id y nombre que otro: se renombra y se le da otro id
+      { id: 'bbbb2222', name: 'Peligroso', url: '--upload-pack=calc', local: '' }, // la dirección peligrosa se descarta y no queda nada
+      { id: 'cccc3333', name: '', url: 'https://github.com/octo/x', local: '' }, // sin nombre
+      { id: 'dddd4444', name: 'Solo carpeta', url: '', local: 'C:\\Carpeta' },
+      { nada: 1 }, null, 'texto',
+    ],
+    selected: { project: 'no-existe' },
   }));
   const clean = Store.load(file, OPTS);
-  assert.equal(clean.repos.length, 1);
-  assert.equal(clean.locals.length, process.platform === 'win32' ? 1 : 2);
-  assert.equal(clean.selected.repo, null);
-  assert.equal(clean.selected.local, null);
+  assert.deepEqual(clean.projects.map((p) => p.name), ['Uno', 'uno (2)', 'Solo carpeta']);
+  assert.equal(new Set(clean.projects.map((p) => p.id)).size, 3, 'ids únicos');
+  assert.equal(clean.projects[0].url, 'https://github.com/octo/hello'); // normalizada, sin .git
+  assert.equal(clean.selected.project, null);
   fs.writeFileSync(file, '{esto no es json');
   assert.deepEqual(Store.load(file, OPTS), Store.empty());
+  assert.equal(Store.readRaw(file), null);
+});
+
+test('almacén: usesUrl sabe si otro proyecto comparte el mismo GitHub', () => {
+  const d = Store.empty();
+  d.projects.push({ id: 'p1p1p1p1', name: 'A', url: 'https://github.com/octo/hello', local: '' });
+  d.projects.push({ id: 'p2p2p2p2', name: 'B', url: 'git@github.com:octo/hello.git', local: 'C:\\B' });
+  assert.equal(Store.usesUrl(d, 'https://github.com/octo/hello', 'p1p1p1p1', OPTS), true);
+  assert.equal(Store.usesUrl(d, 'https://github.com/octo/hello', 'p2p2p2p2', OPTS), true);
+  d.projects.pop();
+  assert.equal(Store.usesUrl(d, 'https://github.com/octo/hello', 'p1p1p1p1', OPTS), false);
+  assert.equal(Store.usesUrl(d, '', 'x', OPTS), false);
+});
+
+test('almacén: los datos de la versión 1 (listas sueltas) se convierten en proyectos y se enlazan por el origin', { skip: !HAS_GIT }, async () => {
+  const w = makeWorld('migracion'); // work (con origin = origin.git) + otra carpeta sin origin
+  const suelta = path.join(w.base, 'suelta');
+  fs.mkdirSync(suelta, { recursive: true });
+  const adoptada = path.join(w.base, 'adoptada');
+  fs.mkdirSync(adoptada, { recursive: true });
+  git(adoptada, 'init', '-q', '-b', 'main');
+  git(adoptada, 'remote', 'add', 'origin', 'https://github.com/octo/otro.git');
+
+  const v1 = {
+    version: 1,
+    repos: [{ url: w.origin, savedAt: '2026-10-01T00:00:00.000Z' }, { url: 'https://github.com/octo/solo-url.git' }, { url: '--malo' }],
+    locals: [{ path: w.work }, { path: suelta }, { path: adoptada }, { path: w.work.toUpperCase() }],
+    selected: { repo: w.origin, local: w.work },
+  };
+  assert.equal(Store.needsMigration(v1), true);
+  assert.equal(Store.needsMigration({ version: 2, projects: [] }), false);
+  assert.equal(Store.needsMigration(null), false);
+
+  const data = Store.sanitize(v1, OPTS);
+  assert.equal(data.version, 2);
+  // antes de enlazar: un proyecto por repositorio y uno por carpeta (la repetida en mayúsculas cuenta una sola vez en Windows)
+  assert.ok(data.projects.every((p) => p.name && (p.url || p.local)));
+  assert.ok(data.projects.some((p) => p.url === w.origin && !p.local));
+  assert.ok(data.projects.some((p) => p.url === 'https://github.com/octo/solo-url' && !p.local));
+  assert.ok(data.projects.some((p) => !p.url && p.local === w.work));
+  assert.ok(Store.byId(data, data.selected.project), 'la selección se conserva');
+  assert.equal(Store.byId(data, data.selected.project).url, w.origin);
+
+  const originOf = async (dir) => {
+    if (!fs.existsSync(path.join(dir, '.git'))) return null;
+    const r = await Git.git(dir, ['config', '--get', 'remote.origin.url']);
+    return r.code === 0 ? r.out.trim() : null;
+  };
+  const changed = await Store.pairByOrigin(data, originOf, OPTS);
+  assert.ok(changed >= 2);
+  const unido = data.projects.find((p) => p.url === w.origin);
+  assert.equal(unido.local.toLowerCase(), w.work.toLowerCase(), 'la carpeta se une al proyecto de su GitHub');
+  assert.equal(data.projects.filter((p) => p.local.toLowerCase() === w.work.toLowerCase()).length, 1, 'y no queda duplicada');
+  assert.equal(data.selected.project, unido.id, 'la selección apunta al proyecto unido');
+  const adopt = data.projects.find((p) => p.local === adoptada);
+  assert.equal(adopt.url, 'https://github.com/octo/otro', 'una carpeta con origin de GitHub adopta esa dirección');
+  assert.ok(data.projects.some((p) => p.local === suelta && !p.url), 'una carpeta sin origin se queda solo con la carpeta');
+  assert.ok(data.projects.some((p) => p.url === 'https://github.com/octo/solo-url' && !p.local), 'una dirección sin carpeta se queda solo con la dirección');
+  assert.equal(new Set(data.projects.map((p) => p.name.toLowerCase())).size, data.projects.length, 'nombres únicos');
 });

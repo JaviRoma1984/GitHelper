@@ -7,6 +7,7 @@ const { spawn } = require('child_process');
 const Store = require('./src/engine/store');
 const Git = require('./src/engine/git');
 const Remote = require('./src/engine/remote');
+const { resolveExe } = require('./src/engine/exe');
 const { runCommand } = require('./src/engine/runner');
 const { parseRepoUrl } = require('./src/shared/urls');
 
@@ -17,7 +18,7 @@ const URL_OPTS = E2E ? { allowLocal: true } : {};
 
 let win = null;
 let data = Store.empty();
-let cwd = null; // carpeta del repositorio local con el que trabaja la consola
+let cwd = null; // carpeta local del proyecto activo: donde trabaja la consola
 let watcher = null;
 let watchTimer = null;
 let zoom = 1;
@@ -29,7 +30,6 @@ const dataFile = () => path.join(app.getPath('userData'), 'datos.json');
 const cacheRoot = () => path.join(app.getPath('userData'), 'repos-github');
 const zoomFile = () => path.join(app.getPath('userData'), 'zoom.json');
 
-function loadData() { data = Store.load(dataFile(), URL_OPTS); }
 function saveData() {
   try { Store.save(dataFile(), data); } catch { /* no es crítico */ }
 }
@@ -45,6 +45,13 @@ function setZoom(z) {
 
 const isDir = (p) => { try { return fs.statSync(p).isDirectory(); } catch { return false; } };
 const cleanDir = (s) => path.resolve(String(s || '').trim().replace(/^"|"$/g, ''));
+
+/** La dirección de «origin» de una carpeta (null si no es un repositorio o no tiene origin). */
+async function originOf(dir) {
+  if (!dir || !fs.existsSync(path.join(dir, '.git'))) return null;
+  const r = await Git.git(dir, ['config', '--get', 'remote.origin.url']);
+  return r.code === 0 ? r.out.trim() || null : null;
+}
 
 // ---------- vigilar la carpeta local ----------
 function startWatching() {
@@ -72,22 +79,27 @@ function stopWatching() {
   if (watcher) { try { watcher.close(); } catch { /* ignorar */ } watcher = null; }
 }
 
-/** Cambia la carpeta de trabajo. Solo se recuerda como «seleccionada» si está en la lista guardada. */
-function useLocal(dir) {
+/** Cambia la carpeta con la que trabaja la consola (la del proyecto activo). */
+function useCwd(dir) {
   cwd = dir || null;
-  data.selected.local = cwd && Store.indexOfLocal(data, cwd) >= 0 ? data.locals[Store.indexOfLocal(data, cwd)].path : null;
-  saveData();
   startWatching();
 }
 
-function resolveInitialLocal() {
+/** Pone en marcha el proyecto: su carpeta local, si existe. */
+function applyProject(p) {
+  const ok = !!(p && p.local && isDir(p.local));
+  useCwd(ok ? p.local : null);
+  return { missingLocal: !!(p && p.local && !ok) };
+}
+
+function resolveInitial() {
   if (process.env.GITHELPER_LOCAL) { // solo para las pruebas automáticas
     fs.mkdirSync(process.env.GITHELPER_LOCAL, { recursive: true });
     cwd = process.env.GITHELPER_LOCAL;
-    return;
+    return { missingLocal: false };
   }
-  const sel = data.selected.local;
-  cwd = sel && isDir(sel) ? sel : null;
+  const p = Store.byId(data, data.selected.project);
+  return applyProject(p);
 }
 
 // ---------- ventana ----------
@@ -140,113 +152,116 @@ function handle(name, fn) {
   });
 }
 
-const NO_FOLDER = 'Primero elige la carpeta de tu repositorio local (arriba a la derecha, en «Repositorio local»).';
+const NO_FOLDER = 'El proyecto activo no tiene carpeta local. Elige un proyecto que la tenga (arriba, en «Proyectos activos») o añádesela con ✎ Editar.';
+const BAD_URL = 'La dirección de GitHub no es válida. Ejemplo: https://github.com/usuario/repositorio';
+let initialMissing = false;
 
 handle('app:init', () => ({
-  data, cwd, version: app.getVersion(), e2e: E2E,
-  gitAvailable: !!require('./src/engine/exe').resolveExe('git'),
-  ghAvailable: !!require('./src/engine/exe').resolveExe('gh'),
+  data, cwd, missingLocal: initialMissing, version: app.getVersion(), e2e: E2E,
+  gitAvailable: !!resolveExe('git'),
+  ghAvailable: !!resolveExe('gh'),
 }));
 
-// --- repositorios de GitHub ---
-handle('repo:save', ({ url }) => {
-  const info = parseRepoUrl(url, URL_OPTS);
-  if (!info) return { error: 'Esa dirección no es válida. Ejemplo: https://github.com/usuario/repositorio' };
-  const i = Store.indexOfRepo(data, url, URL_OPTS);
-  let already = false;
-  if (i >= 0) { already = true; data.repos[i].url = info.url; } else {
-    if (data.repos.length >= Store.MAX_ITEMS) return { error: 'Ya hay demasiados repositorios guardados. Borra alguno.' };
-    data.repos.push({ url: info.url, savedAt: new Date().toISOString() });
+// --- proyectos ---
+/** Crea o edita un proyecto (nombre + GitHub + carpeta local) y lo deja como proyecto activo. */
+handle('project:save', async ({ id, name, url, local }) => {
+  const nm = String(name == null ? '' : name).trim();
+  if (!nm) return { error: 'Ponle un nombre al proyecto.' };
+  if (nm.length > Store.NAME_MAX) return { error: 'El nombre es demasiado largo (máximo ' + Store.NAME_MAX + ' letras).' };
+  if (data.projects.some((p) => p.id !== id && p.name.toLowerCase() === nm.toLowerCase())) return { error: 'Ya hay un proyecto con ese nombre. Elige otro.' };
+
+  let cleanUrl = '';
+  if (url && String(url).trim()) {
+    const info = parseRepoUrl(url, URL_OPTS);
+    if (!info) return { error: BAD_URL };
+    cleanUrl = info.url;
   }
-  data.selected.repo = info.url;
-  saveData();
-  return { ok: true, already, url: info.url, data };
-});
-
-handle('repo:remove', async ({ url }) => {
-  const i = Store.indexOfRepo(data, url, URL_OPTS);
-  if (i < 0) return { error: 'Ese repositorio no está en la lista guardada.' };
-  const removed = data.repos.splice(i, 1)[0];
-  if (data.selected.repo === removed.url) data.selected.repo = null;
-  saveData();
-  await Remote.removeCache(cacheRoot(), removed.url, URL_OPTS);
-  return { ok: true, data };
-});
-
-handle('repo:select', ({ url }) => {
-  if (url == null || url === '') { data.selected.repo = null; saveData(); return { ok: true, data }; }
-  const i = Store.indexOfRepo(data, url, URL_OPTS);
-  data.selected.repo = i >= 0 ? data.repos[i].url : null; // lo no guardado se puede ver, pero no se recuerda
-  saveData();
-  return { ok: true, data };
-});
-
-handle('remote:load', async ({ url, fetch }) => {
-  const info = parseRepoUrl(url, URL_OPTS);
-  if (!info) return { error: 'Esa dirección no es válida. Ejemplo: https://github.com/usuario/repositorio' };
-  const res = await Remote.loadRemote(cacheRoot(), info.url, { fetch: fetch !== false, urlOpts: URL_OPTS });
-  return Object.assign({ info: { label: info.label, kind: info.kind, web: info.web, key: info.key } }, res, { dir: undefined });
-});
-
-// --- carpetas locales ---
-handle('local:save', ({ dir }) => {
-  if (!dir || !String(dir).trim()) return { error: 'Escribe la ruta de una carpeta.' };
-  const target = cleanDir(dir);
-  if (!isDir(target)) return { error: 'Esa carpeta no existe.' };
-  const i = Store.indexOfLocal(data, target);
-  const already = i >= 0;
-  if (!already) {
-    if (data.locals.length >= Store.MAX_ITEMS) return { error: 'Ya hay demasiadas carpetas guardadas. Borra alguna.' };
-    data.locals.push({ path: target, savedAt: new Date().toISOString() });
+  let cleanLocal = '';
+  if (local && String(local).trim()) {
+    const target = cleanDir(local);
+    if (!isDir(target)) return { error: 'Esa carpeta no existe: ' + target };
+    cleanLocal = target;
   }
-  useLocal(target);
-  return { ok: true, already, dir: target, cwd, data };
+  if (!cleanUrl && !cleanLocal) return { error: 'Pon al menos la dirección de GitHub o la carpeta local (lo ideal: las dos).' };
+
+  let project;
+  let oldUrl = '';
+  if (id) {
+    project = Store.byId(data, id);
+    if (!project) return { error: 'Ese proyecto ya no existe.' };
+    oldUrl = project.url;
+    Object.assign(project, { name: nm, url: cleanUrl, local: cleanLocal });
+  } else {
+    if (data.projects.length >= Store.MAX_ITEMS) return { error: 'Ya hay demasiados proyectos. Borra alguno.' };
+    project = { id: Store.newId(), name: nm, url: cleanUrl, local: cleanLocal, savedAt: new Date().toISOString() };
+    data.projects.push(project);
+  }
+  data.selected.project = project.id;
+  saveData();
+  // si al editar se cambió la dirección de GitHub, la copia que se había descargado de la anterior ya no hace falta
+  if (oldUrl && oldUrl !== cleanUrl && !Store.usesUrl(data, oldUrl, project.id, URL_OPTS)) await Remote.removeCache(cacheRoot(), oldUrl, URL_OPTS);
+  const st = applyProject(project);
+  return { ok: true, project, data, cwd, missingLocal: st.missingLocal, created: !id };
 });
 
-handle('local:remove', ({ dir }) => {
-  const i = Store.indexOfLocal(data, cleanDir(dir));
-  if (i < 0) return { error: 'Esa carpeta no está en la lista guardada.' };
-  data.locals.splice(i, 1); // solo se quita de la lista: la carpeta del disco NO se toca (y sigue abierta hasta que se elija otra)
-  if (data.selected.local && Store.indexOfLocal(data, data.selected.local) < 0) data.selected.local = null;
+/** Quita un proyecto de la lista. NO borra nada en GitHub ni en el disco (solo la copia de solo lectura que GitHelper descargó para dibujarlo). */
+handle('project:remove', async ({ id }) => {
+  const i = data.projects.findIndex((p) => p.id === id);
+  if (i < 0) return { error: 'Ese proyecto no está en la lista.' };
+  const removed = data.projects.splice(i, 1)[0];
+  if (data.selected.project === id) { data.selected.project = null; useCwd(null); }
   saveData();
+  if (removed.url && !Store.usesUrl(data, removed.url, id, URL_OPTS)) await Remote.removeCache(cacheRoot(), removed.url, URL_OPTS);
   return { ok: true, data, cwd };
 });
 
-handle('local:select', ({ dir }) => {
-  if (dir == null || dir === '') { useLocal(null); return { ok: true, cwd, data }; }
-  const target = cleanDir(dir);
-  if (!isDir(target)) return { error: 'Esa carpeta no existe.', missing: true, dir: target };
-  useLocal(target);
-  return { ok: true, cwd, data };
+handle('project:select', ({ id }) => {
+  if (id == null || id === '') {
+    data.selected.project = null;
+    useCwd(null);
+    saveData();
+    return { ok: true, data, cwd, missingLocal: false };
+  }
+  const p = Store.byId(data, id);
+  if (!p) return { error: 'Ese proyecto ya no existe.' };
+  data.selected.project = p.id;
+  const st = applyProject(p);
+  saveData();
+  return { ok: true, data, cwd, missingLocal: st.missingLocal };
 });
 
-handle('local:choose', async () => {
+handle('dialog:folder', async () => {
   const r = await dialog.showOpenDialog(win, {
-    title: 'Elige la carpeta de tu repositorio local',
+    title: 'Elige la carpeta local del proyecto',
     defaultPath: cwd || app.getPath('documents'),
     properties: ['openDirectory'],
   });
   if (r.canceled || !r.filePaths.length) return { canceled: true };
-  useLocal(r.filePaths[0]);
-  return { ok: true, cwd, data };
+  return { path: r.filePaths[0] };
 });
 
-/** Para cada carpeta guardada, la dirección de su «origin» (así se enlaza una carpeta con su repositorio de GitHub). */
-handle('local:origins', async () => {
-  const list = await Promise.all(data.locals.slice(0, 60).map(async (l) => {
-    if (!fs.existsSync(path.join(l.path, '.git'))) return { path: l.path, origin: null };
-    const r = await Git.git(l.path, ['config', '--get', 'remote.origin.url']);
-    return { path: l.path, origin: r.code === 0 ? r.out.trim() || null : null };
-  }));
-  return { list };
+/** El «origin» de una carpeta, para proponer la dirección de GitHub al crear un proyecto. */
+handle('local:origin', async ({ dir }) => {
+  if (!dir || !String(dir).trim()) return { origin: null };
+  const target = cleanDir(dir);
+  return { origin: isDir(target) ? await originOf(target) : null };
+});
+
+handle('remote:load', async ({ url, fetch }) => {
+  const info = parseRepoUrl(url, URL_OPTS);
+  if (!info) return { error: BAD_URL };
+  const res = await Remote.loadRemote(cacheRoot(), info.url, { fetch: fetch !== false, urlOpts: URL_OPTS });
+  return Object.assign({ info: { label: info.label, kind: info.kind, web: info.web, key: info.key } }, res, { dir: undefined });
 });
 
 handle('state:get', () => Git.getState(cwd));
 
 // --- consola ---
 handle('term:run', async ({ id, argv, redirect }, event) => {
+  const send = (channel, payload) => { if (!event.sender.isDestroyed()) event.sender.send(channel, payload); };
   if (!cwd) {
-    event.sender.send('term:data', { id, text: NO_FOLDER + '\n', stream: 'err' });
+    send('term:data', { id, text: NO_FOLDER + '\n', stream: 'err' });
+    send('term:end', { id });
     return { code: 2 };
   }
   const ac = new AbortController();
@@ -254,10 +269,13 @@ handle('term:run', async ({ id, argv, redirect }, event) => {
   try {
     return await runCommand({ cwd }, { argv, redirect: redirect || null }, {
       signal: ac.signal,
-      emit: (text, stream) => { if (!event.sender.isDestroyed()) event.sender.send('term:data', { id, text, stream }); },
+      emit: (text, stream) => send('term:data', { id, text, stream }),
     });
   } finally {
     running.delete(id);
+    // El aviso de «terminado» va por el mismo canal que el texto: así la interfaz sabe que ya llegó todo (la respuesta de invoke
+    // viaja por otro camino y a veces se adelantaba, dejando sin mostrar la salida de los comandos muy rápidos).
+    send('term:end', { id });
   }
 });
 
@@ -296,12 +314,19 @@ if (!E2E && !app.requestSingleInstanceLock()) {
   app.on('second-instance', () => {
     if (win) { if (win.isMinimized()) win.restore(); win.focus(); }
   });
-  app.whenReady().then(() => {
-    loadData();
-    Remote.pruneCache(cacheRoot(), data.repos.map((r) => r.url), URL_OPTS);
+  app.whenReady().then(async () => {
+    const raw = Store.readRaw(dataFile());
+    data = Store.sanitize(raw, URL_OPTS);
+    if (Store.needsMigration(raw)) {
+      // Versión antigua (listas sueltas de repositorios y carpetas): se convierte a proyectos, enlazando cada carpeta con su GitHub por el «origin».
+      // Antes se guarda una copia de los datos antiguos, por si hiciera falta recuperarlos.
+      try { fs.copyFileSync(dataFile(), path.join(path.dirname(dataFile()), 'datos-version1-copia.json')); } catch { /* sin copia: se sigue */ }
+      await Store.pairByOrigin(data, originOf, URL_OPTS);
+      saveData();
+    }
+    Remote.pruneCache(cacheRoot(), data.projects.map((p) => p.url).filter(Boolean), URL_OPTS);
     loadZoom();
-    resolveInitialLocal();
-    startWatching();
+    initialMissing = resolveInitial().missingLocal;
     createWindow();
     if (E2E) require('./scripts/e2e').run({ win, app, getCwd: () => cwd, getData: () => data, dataFile, cacheRoot });
     app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) createWindow(); });

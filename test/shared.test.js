@@ -249,6 +249,33 @@ test('graph: una rama ya fusionada en su madre se ve abierta, con su recorrido y
   assert.deepEqual(solo.rails.map((r) => r.name), ['develop']);
 });
 
+test('graph: «estás aquí» señala el commit donde se está (y su rama) o, si no está, hasta dónde llega la rama', () => {
+  const commits = [
+    { sha: 'f2', parents: ['f1'], subject: 'feature 2', refs: [{ type: 'branch', name: 'feature', head: true }] },
+    { sha: 'f1', parents: ['m2'], subject: 'feature 1', refs: [] },
+    { sha: 'm2', parents: ['m1'], subject: 'main 2', refs: [{ type: 'branch', name: 'main' }] },
+    { sha: 'm1', parents: [], subject: 'inicio', refs: [] },
+  ];
+  const exacto = G.buildGraph(commits, { currentBranch: 'feature', headSha: 'f2', youAreAt: 'f2', youAreOn: 'feature' });
+  const by = Object.fromEntries(exacto.nodes.map((n) => [n.sha, n]));
+  assert.equal(exacto.here.sha, 'f2');
+  assert.equal(exacto.here.exact, true);
+  assert.equal(exacto.here.branch, 'feature');
+  assert.equal(exacto.here.x, by.f2.x);
+  assert.equal(exacto.here.y, by.f2.y);
+  assert.ok(exacto.branchColors.feature > 0, 'la flecha usará el color de la rama feature');
+  // el commit exacto no está en el dibujo (HEAD aún sin subir): se señala hasta dónde llega la rama
+  const sinSubir = G.buildGraph(commits, { currentBranch: 'feature', youAreAt: 'nuevo-local', youAreOn: 'feature' });
+  assert.equal(sinSubir.here.sha, 'f2');
+  assert.equal(sinSubir.here.exact, false);
+  // la rama tampoco está: no hay flecha
+  assert.equal(G.buildGraph(commits, { currentBranch: 'main', youAreAt: 'nuevo-local', youAreOn: 'otra' }).here, null);
+  // sin pedirlo, no hay flecha; con ella, el dibujo es más alto (sitio para la flecha)
+  const sin = G.buildGraph(commits, { currentBranch: 'feature', headSha: 'f2' });
+  assert.equal(sin.here, null);
+  assert.equal(exacto.height, sin.height + G.HERE_PAD);
+});
+
 test('graph: con muchas ramas (más que colores en la paleta) todas siguen teniendo un color distinto', () => {
   const commits = [];
   for (let i = 1; i <= 14; i++) commits.push({ sha: 'b' + i, parents: ['m1'], subject: 'rama ' + i, refs: [{ type: 'branch', name: 'rama' + String(i).padStart(2, '0') }] });

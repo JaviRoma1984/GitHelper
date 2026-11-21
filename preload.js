@@ -6,17 +6,14 @@ const call = (name, arg) => ipcRenderer.invoke(name, arg);
 
 contextBridge.exposeInMainWorld('api', {
   init: () => call('app:init'),
-  // repositorios de GitHub guardados
-  saveRepo: (url) => call('repo:save', { url }),
-  removeRepo: (url) => call('repo:remove', { url }),
-  selectRepo: (url) => call('repo:select', { url }),
+  // proyectos (nombre + GitHub + carpeta local)
+  saveProject: (project) => call('project:save', project),
+  removeProject: (id) => call('project:remove', { id }),
+  selectProject: (id) => call('project:select', { id }),
+  chooseFolder: () => call('dialog:folder'),
+  folderOrigin: (dir) => call('local:origin', { dir }),
+  // lectura de GitHub y estado de la carpeta local del proyecto activo
   loadRemote: (url, fetch) => call('remote:load', { url, fetch }),
-  // carpetas locales guardadas
-  saveLocal: (dir) => call('local:save', { dir }),
-  removeLocal: (dir) => call('local:remove', { dir }),
-  selectLocal: (dir) => call('local:select', { dir }),
-  chooseLocal: () => call('local:choose'),
-  localOrigins: () => call('local:origins'),
   getState: () => call('state:get'),
   // consola
   run: (id, argv, redirect) => call('term:run', { id, argv, redirect }),
@@ -27,5 +24,6 @@ contextBridge.exposeInMainWorld('api', {
   openTerminal: () => call('external:terminal'),
   openFolder: () => call('external:reveal'),
   onTermData: (cb) => ipcRenderer.on('term:data', (_e, d) => cb(d)),
+  onTermEnd: (cb) => ipcRenderer.on('term:end', (_e, d) => cb(d)),
   onRepoChanged: (cb) => ipcRenderer.on('repo:changed', () => cb()),
 });

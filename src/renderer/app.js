@@ -1,4 +1,4 @@
-/* GitHelper · Interfaz: une los dos apartados (GitHub y local), los dos visualizadores, la consola y la lista de órdenes. */
+/* GitHelper · Interfaz: proyectos activos (nombre + GitHub + carpeta local), los dos visualizadores, la consola y la lista de órdenes. */
 (function () {
   'use strict';
   const GH = window.GH;
@@ -7,11 +7,12 @@
   const esc = (s) => GH.Ansi.escapeHtml(String(s)).replace(/"/g, '&quot;');
 
   const S = {
-    data: { repos: [], locals: [], selected: { repo: null, local: null } },
-    cwd: null,
+    data: { projects: [], selected: { project: null } },
+    cwd: null, // carpeta local del proyecto activo
+    missingLocal: false, // el proyecto tiene carpeta local pero ya no existe en el disco
     local: null, // estado del repositorio local (git)
     remote: null, // último resultado de leer el repositorio de GitHub
-    remoteUrl: '', // dirección que se está viendo arriba
+    remoteUrl: '', // dirección de GitHub del proyecto activo
     e2e: false,
     version: '',
   };
@@ -23,9 +24,8 @@
 
   const parse = (u) => GH.Urls.parseRepoUrl(u, { allowLocal: S.e2e });
   const sameRepo = (a, b) => GH.Urls.sameRepo(a, b, { allowLocal: S.e2e });
-  const normDir = (p) => String(p || '').replace(/[\\/]+$/, '').toLowerCase();
-  const sameDir = (a, b) => !!a && !!b && normDir(a) === normDir(b);
   const baseName = (p) => String(p || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop() || String(p || '');
+  const curProject = () => S.data.projects.find((p) => p.id === S.data.selected.project) || null;
 
   // ---------------------------------------------------------------- avisos y confirmaciones
   let toastTimer = null;
@@ -49,7 +49,7 @@
       okb.className = 'btn ' + (o.danger ? 'danger' : 'primary');
       modal.hidden = false;
       okb.focus();
-      const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); done(false); } };
+      const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); done(false); } };
       const done = (v) => {
         modal.hidden = true;
         okb.onclick = null;
@@ -63,114 +63,167 @@
     });
   }
 
-  function setHint(el, text, cls) {
-    el.textContent = text || '';
-    el.className = 'field-hint' + (cls ? ' ' + cls : '');
-    el.title = text || '';
-  }
-
   const pill = (text, cls, cmd, title) =>
     '<span class="pill ' + (cls || '') + '"' + (cmd ? ' data-cmd="' + esc(cmd) + '"' : '') + (title ? ' title="' + esc(title) + '"' : '') + '>' + text + '</span>';
 
-  // ---------------------------------------------------------------- listas desplegables y botones de navegación
-  function option(value, text, disabled) {
-    const o = document.createElement('option');
-    o.value = value;
-    o.textContent = text;
-    if (disabled) o.disabled = true;
-    return o;
+  // ---------------------------------------------------------------- proyectos activos: barra, desplegable e información
+  function projectSub(p) {
+    const info = p.url ? parse(p.url) : null;
+    return [p.url ? '☁ ' + (info ? info.label : p.url) : '☁ (sin GitHub)', p.local ? '📁 ' + p.local : '📁 (sin carpeta local)'].join('   ·   ');
   }
 
-  function currentSavedRepo() {
-    return S.remoteUrl ? S.data.repos.find((r) => sameRepo(r.url, S.remoteUrl)) || null : null;
+  function renderProjectMenu() {
+    const sel = S.data.selected.project;
+    const rows = S.data.projects.map((p) =>
+      '<div class="pm-item' + (p.id === sel ? ' sel' : '') + '" data-id="' + esc(p.id) + '">' +
+        '<button class="pm-pick" type="button" title="Abrir este proyecto"><span class="pm-name">' + esc(p.name) + '</span><span class="pm-sub">' + esc(projectSub(p)) + '</span></button>' +
+        '<button class="pm-act pm-edit" type="button" title="Editar el nombre, el GitHub o la carpeta local de este proyecto">✎</button>' +
+        '<button class="pm-act pm-del" type="button" title="Borrar este proyecto de la lista (no borra nada en GitHub ni en tu disco)">🗑</button>' +
+      '</div>');
+    $('project-items').innerHTML = rows.length ? rows.join('') : '<div class="pm-empty">Todavía no hay ningún proyecto. Pulsa «Agregar proyecto».</div>';
   }
 
-  function currentSavedLocal() {
-    return S.cwd ? S.data.locals.find((l) => sameDir(l.path, S.cwd)) || null : null;
-  }
-
-  function fillRemoteList() {
-    const sel = $('remote-list');
-    const repos = S.data.repos;
-    const cur = currentSavedRepo();
-    sel.innerHTML = '';
-    if (!repos.length) {
-      sel.appendChild(option('', '— ningún repositorio guardado —'));
-      sel.disabled = true;
-    } else {
-      sel.disabled = false;
-      if (!cur) sel.appendChild(option('', '— elige uno de los ' + repos.length + ' guardados —'));
-      repos.forEach((r) => {
-        const info = parse(r.url);
-        sel.appendChild(option(r.url, info ? info.label + (info.kind === 'github' ? '' : '  (' + info.host + ')') : r.url));
-      });
-      sel.value = cur ? cur.url : '';
-    }
-    $('remote-count').textContent = repos.length ? repos.length + (repos.length === 1 ? ' guardado' : ' guardados') : '';
-    const many = repos.length > 1 || (repos.length === 1 && !cur);
-    $('btn-remote-prev').disabled = !many;
-    $('btn-remote-next').disabled = !many;
-  }
-
-  function fillLocalList() {
-    const sel = $('local-list');
-    const locals = S.data.locals;
-    const cur = currentSavedLocal();
-    sel.innerHTML = '';
-    if (!locals.length) {
-      sel.appendChild(option('', '— ninguna carpeta guardada —'));
-      sel.disabled = true;
-    } else {
-      sel.disabled = false;
-      if (!cur) sel.appendChild(option('', '— elige una de las ' + locals.length + ' guardadas —'));
-      locals.forEach((l) => sel.appendChild(option(l.path, baseName(l.path) + '   —   ' + l.path)));
-      sel.value = cur ? cur.path : '';
-    }
-    $('local-count').textContent = locals.length ? locals.length + (locals.length === 1 ? ' guardada' : ' guardadas') : '';
-    const many = locals.length > 1 || (locals.length === 1 && !cur);
-    $('btn-local-prev').disabled = !many;
-    $('btn-local-next').disabled = !many;
-  }
-
-  function updateRemoteHint() {
-    const el = $('remote-hint');
-    const v = $('remote-url').value.trim();
-    if (!v) { setHint(el, S.data.repos.length ? '' : 'Escribe la dirección de un repositorio de GitHub y pulsa «Guardar».'); return; }
-    const info = parse(v);
-    if (!info) { setHint(el, 'No parece una dirección válida. Ejemplo: https://github.com/usuario/repositorio', 'warn'); return; }
-    if (S.data.repos.some((r) => sameRepo(r.url, info.url))) setHint(el, '✔ Guardado en la lista (' + info.label + ')', 'ok');
-    else setHint(el, 'Sin guardar: pulsa «Guardar» para añadirlo a la lista.', '');
-  }
-
-  function updateLocalHint() {
-    const el = $('local-hint');
-    const v = $('local-path').value.trim();
-    if (!v) { setHint(el, S.data.locals.length ? '' : 'Elige la carpeta con «Examinar…» o escribe su ruta y pulsa «Guardar».'); return; }
-    if (S.local && S.local.cwd && sameDir(S.local.cwd, v.replace(/^"|"$/g, ''))) {
-      if (!S.local.exists) { setHint(el, 'Esa carpeta no existe.', 'err'); return; }
-      const saved = !!currentSavedLocal();
-      const kind = S.local.isRepo ? 'repositorio de Git' : 'todavía no es un repositorio';
-      setHint(el, (saved ? '✔ Guardada en la lista · ' : 'Sin guardar (pulsa «Guardar») · ') + kind, saved ? 'ok' : '');
+  function renderProjectInfo() {
+    const p = curProject();
+    const urlEl = $('pi-url');
+    const pathEl = $('pi-path');
+    if (!p) {
+      urlEl.textContent = '—';
+      pathEl.textContent = '—';
+      urlEl.className = 'pi-text';
+      pathEl.className = 'pi-text';
+      urlEl.title = '';
+      pathEl.title = '';
+      $('btn-remote-web').disabled = true;
+      $('btn-folder').disabled = true;
       return;
     }
-    setHint(el, 'Pulsa Enter para abrir esta carpeta.', '');
+    const info = p.url ? parse(p.url) : null;
+    urlEl.textContent = p.url ? (info ? info.label + '  ·  ' + p.url : p.url) : 'sin dirección de GitHub todavía (pulsa ✎ para añadirla)';
+    urlEl.title = p.url || '';
+    urlEl.className = 'pi-text' + (p.url ? '' : ' missing');
+    pathEl.textContent = p.local ? p.local + (S.missingLocal ? '   (la carpeta ya no existe)' : '') : 'sin carpeta local todavía (pulsa ✎ para añadirla)';
+    pathEl.title = p.local || '';
+    pathEl.className = 'pi-text' + (!p.local || S.missingLocal ? ' missing' : '');
+    $('btn-remote-web').disabled = !(info && info.web);
+    $('btn-folder').disabled = !(p.local && !S.missingLocal);
+  }
+
+  function renderProjectBar() {
+    const p = curProject();
+    const n = S.data.projects.length;
+    $('project-btn-label').textContent = p ? p.name : '— elige un proyecto —';
+    $('project-count').textContent = n ? n + (n === 1 ? ' proyecto' : ' proyectos') : '';
+    const many = n > 1 || (n === 1 && !p);
+    $('btn-project-prev').disabled = !many;
+    $('btn-project-next').disabled = !many;
+    renderProjectMenu();
+    renderProjectInfo();
+  }
+
+  function openMenu() {
+    renderProjectMenu();
+    $('project-menu').hidden = false;
+    $('project-btn').setAttribute('aria-expanded', 'true');
+  }
+  function closeMenu() {
+    $('project-menu').hidden = true;
+    $('project-btn').setAttribute('aria-expanded', 'false');
+  }
+  function toggleMenu() {
+    if ($('project-menu').hidden) openMenu(); else closeMenu();
+  }
+
+  // ---------------------------------------------------------------- formulario de proyecto (agregar / editar)
+  let formId = null;
+  let submitting = false;
+
+  function openForm(id) {
+    closeMenu();
+    formId = id || null;
+    const p = id ? S.data.projects.find((x) => x.id === id) : null;
+    $('pf-title').textContent = p ? 'Editar proyecto' : 'Nuevo proyecto';
+    $('pf-save').textContent = p ? '💾 Guardar cambios' : '💾 Guardar proyecto';
+    $('pf-name').value = p ? p.name : '';
+    $('pf-url').value = p ? p.url : '';
+    $('pf-local').value = p ? p.local : '';
+    $('pf-note').textContent = '';
+    $('pf-error').textContent = '';
+    $('pform').hidden = false;
+    $('pf-name').focus();
+  }
+
+  function closeForm() {
+    $('pform').hidden = true;
+    formId = null;
+  }
+
+  /** Al elegir la carpeta: propone el nombre (el de la carpeta) y la dirección de GitHub (el «origin» de esa carpeta) si están vacíos. */
+  async function suggestFromFolder() {
+    const dir = $('pf-local').value.trim();
+    if (!dir) return;
+    if (!$('pf-name').value.trim()) $('pf-name').value = baseName(dir);
+    if (!$('pf-url').value.trim()) {
+      const r = await api.folderOrigin(dir);
+      const info = r && r.origin ? parse(r.origin) : null;
+      if (info) {
+        $('pf-url').value = info.url;
+        $('pf-note').textContent = 'La dirección de GitHub se ha tomado del «origin» de esa carpeta.';
+      }
+    }
+  }
+
+  async function submitForm() {
+    if (submitting) return;
+    submitting = true; // solo mientras se guarda (evita el doble clic); no mientras se redibuja, para poder volver a editar enseguida
+    $('pf-error').textContent = '';
+    const wasNew = !formId;
+    let r;
+    try {
+      r = await api.saveProject({ id: formId, name: $('pf-name').value, url: $('pf-url').value, local: $('pf-local').value });
+    } finally {
+      submitting = false;
+    }
+    if (r.error) { $('pf-error').textContent = r.error; return; }
+    closeForm();
+    S.data = r.data;
+    S.cwd = r.cwd;
+    S.missingLocal = !!r.missingLocal;
+    toast(wasNew ? '✔ Proyecto guardado: ' + r.project.name : '✔ Cambios guardados: ' + r.project.name);
+    await applyProject();
   }
 
   // ---------------------------------------------------------------- visualizador de GitHub
   const cmdBtn = (cmd) => '<span class="cmd" data-cmd="' + esc(cmd) + '">' + esc(cmd) + '</span>';
 
-  /** Los push que se marcan en el dibujo de GitHub: los hechos desde la carpeta local enlazada con ESE repositorio (git los apunta en su registro). */
+  /** Los push que se marcan en el dibujo de GitHub: los hechos desde la carpeta local del proyecto (git los apunta en su registro). */
   function pushesForRemote() {
     const st = S.local;
     if (!st || !st.isRepo || !st.origin || !S.remoteUrl || !sameRepo(st.origin, S.remoteUrl)) return [];
     return (st.pushes || []).filter((p) => p.ref.startsWith('origin/'));
   }
-  const pushSig = () => pushesForRemote().map((p) => p.ref + ':' + p.new + ':' + p.ts).join('|');
+  /** Dónde estás trabajando (commit y rama de la carpeta local), para señalarlo también en el dibujo de GitHub. */
+  function hereForRemote() {
+    const st = S.local;
+    if (!st || !st.isRepo || !st.origin || !S.remoteUrl || !sameRepo(st.origin, S.remoteUrl)) return { at: null, on: null };
+    return { at: st.unborn ? null : st.headSha, on: st.branch || null };
+  }
+  // Firma de lo que depende de la carpeta local en el dibujo de GitHub: si cambia (un push nuevo, otra rama, otro commit), se vuelve a dibujar.
+  const pushSig = () => {
+    const h = hereForRemote();
+    return pushesForRemote().map((p) => p.ref + ':' + p.new + ':' + p.ts).join('|') + '#' + h.at + '#' + h.on;
+  };
 
   function remoteEmptyHtml() {
+    const p = curProject();
+    if (p && !p.url) {
+      return '<div class="empty-card"><h3>☁ Este proyecto todavía no tiene dirección de GitHub</h3>' +
+        '<p>Pulsa <b>Proyectos activos ▾</b>, luego <b>✎</b> junto a «' + esc(p.name) + '» y escribe la dirección de su repositorio (por ejemplo <code>https://github.com/usuario/repositorio</code>).</p></div>';
+    }
     return '<div class="empty-card"><h3>☁ Aquí se dibujan las ramas de tu repositorio de GitHub</h3>' +
-      '<ol><li>Escribe arriba su dirección (por ejemplo <code>https://github.com/usuario/repositorio</code>) y pulsa <b>Ver</b>.</li>' +
-      '<li>Pulsa <b>Guardar</b> para dejarla en la lista y poder moverte entre tus repositorios con la lista desplegable o las flechas ‹ ›.</li></ol>' +
+      '<ol><li>Pulsa <b>Proyectos activos ▾</b> (arriba) y después <b>＋ Agregar proyecto</b>.</li>' +
+      '<li>Ponle un <b>nombre</b> y escribe la <b>dirección de GitHub</b> donde vive y la <b>carpeta local</b> donde lo tienes. Pulsa Guardar.</li>' +
+      '<li>Al elegir el proyecto, GitHelper ya sabe cuál es su GitHub y su carpeta, y dibuja las dos cosas una al lado de la otra.</li></ol>' +
       '<p>No hace falta que el repositorio esté en tu ordenador: GitHelper lee solo su historial. Si es privado, necesita que Git ya tenga tu sesión de GitHub iniciada.</p></div>';
   }
 
@@ -183,7 +236,7 @@
     let extra = '';
     if (r.errorKind === 'auth') extra = '<p>Para iniciar sesión pulsa <b>⌨ Terminal externa</b> (arriba a la derecha) y escribe <code>gh auth login</code>.</p>';
     return '<div class="empty-card err"><h3>No he podido leer ese repositorio</h3><p>' + esc(r.error) + '</p>' + extra +
-      '<p>Cuando lo hayas arreglado, pulsa <b>↻ Actualizar</b>.</p></div>';
+      '<p>Cuando lo hayas arreglado (o corregido la dirección con ✎ en «Proyectos activos»), pulsa <b>↻ Actualizar</b>.</p></div>';
   }
 
   function remoteStrip(r) {
@@ -214,7 +267,12 @@
       return;
     }
     S.remotePushSig = pushSig();
-    remoteView.render(r.commits, { currentBranch: r.defaultBranch, pushes: pushesForRemote() });
+    const here = hereForRemote();
+    remoteView.render(r.commits, { currentBranch: r.defaultBranch, pushes: pushesForRemote(), youAreAt: here.at, youAreOn: here.on });
+    // Si la rama en la que estás aún no existe en GitHub, no hay dónde poner la flecha: se avisa en la franja.
+    if (here.on && !(remoteView.model && remoteView.model.here)) {
+      $('remote-strip').innerHTML += pill('tu rama «' + esc(here.on) + '» aún no está en GitHub', 'warn', 'git push -u origin ' + here.on, 'Estás en esa rama en tu carpeta local, pero todavía no la has subido. Clic: pegar el comando para subirla');
+    }
   }
 
   async function showRemote(url, o) {
@@ -222,7 +280,6 @@
     const info = parse(url);
     if (!info) return;
     S.remoteUrl = info.url;
-    $('remote-url').value = info.url;
     const seq = ++remoteSeq;
     const sameShown = !!(S.remote && S.remote.info && S.remote.info.key === info.key && S.remote.ok);
     $('btn-remote-refresh').disabled = true;
@@ -233,28 +290,22 @@
     } else {
       $('remote-strip').innerHTML = remoteStrip(S.remote) + pill('<span class="spin">↻</span> actualizando…', 'warn');
     }
-    fillRemoteList();
-    updateRemoteHint();
     renderLocalStrip();
     const res = await api.loadRemote(info.url, opts.fetch !== false);
-    if (seq !== remoteSeq) return; // mientras tanto se pidió otro repositorio: esta respuesta ya no vale
+    if (seq !== remoteSeq) return; // mientras tanto se pidió otro proyecto: esta respuesta ya no vale
     $('btn-remote-refresh').disabled = false;
     if (res.error && !res.info) { S.remote = { info: { label: info.label, key: info.key, web: info.web }, ok: false, error: res.error }; } else S.remote = res;
     renderRemote();
-    fillRemoteList();
-    updateRemoteHint();
     renderLocalStrip();
   }
 
+  /** El proyecto activo no tiene GitHub (o no hay proyecto): se vacía el dibujo de GitHub. */
   function clearRemote() {
     remoteSeq++;
     S.remote = null;
     S.remoteUrl = '';
-    $('remote-url').value = '';
     $('btn-remote-refresh').disabled = false;
     renderRemote();
-    fillRemoteList();
-    updateRemoteHint();
     renderLocalStrip();
   }
 
@@ -264,17 +315,25 @@
       return '<div class="empty-card err"><h3>⚠ No encuentro Git en este ordenador</h3><p>Instala «Git for Windows» desde <b>git-scm.com/download/win</b> y vuelve a abrir GitHelper.</p></div>';
     }
     if (st.noFolder) {
+      const p = curProject();
+      if (p && S.missingLocal) {
+        return '<div class="empty-card err"><h3>La carpeta de este proyecto ya no existe</h3><p><code>' + esc(p.local) + '</code></p>' +
+          '<p>Pulsa <b>Proyectos activos ▾</b>, luego <b>✎</b> junto a «' + esc(p.name) + '» y elige su carpeta nueva con <b>Examinar…</b>.</p></div>';
+      }
+      if (p) {
+        return '<div class="empty-card"><h3>📁 Este proyecto todavía no tiene carpeta local</h3>' +
+          '<p>Pulsa <b>Proyectos activos ▾</b>, luego <b>✎</b> junto a «' + esc(p.name) + '» y elige la carpeta de tu ordenador con <b>Examinar…</b>.</p></div>';
+      }
       return '<div class="empty-card"><h3>📁 Aquí se dibujan las ramas de tu repositorio local</h3>' +
-        '<ol><li>Pulsa <b>Examinar…</b> (arriba a la derecha) y elige la carpeta de tu proyecto, o escribe su ruta y pulsa Enter.</li>' +
-        '<li>Pulsa <b>Guardar</b> para dejarla en la lista.</li>' +
-        '<li>Con las dos cosas elegidas verás las ramas de GitHub arriba y las de tu ordenador aquí, para compararlas.</li></ol></div>';
+        '<ol><li>Elige un proyecto en <b>Proyectos activos ▾</b>, o agrega uno con <b>＋ Agregar proyecto</b>.</li>' +
+        '<li>Su carpeta local se abre sola y aquí verás sus ramas, junto a las de GitHub, para compararlas.</li></ol></div>';
     }
-    if (!st.exists) return '<div class="empty-card err"><h3>La carpeta no existe</h3><p>Elige otra con «Examinar…» o escribe otra ruta.</p></div>';
+    if (!st.exists) return '<div class="empty-card err"><h3>La carpeta no existe</h3><p>Edita el proyecto (✎) y elige otra.</p></div>';
     if (st.error === 'dubious ownership') {
       return '<div class="empty-card err"><h3>Git desconfía de esta carpeta</h3><p>Windows indica que la carpeta pertenece a otro usuario. Si es tuya y es segura, pulsa: ' + cmdBtn('git config --global --add safe.directory "' + st.cwd + '"') + ' y luego Enter.</p></div>';
     }
     if (st.parentRepo) {
-      return '<div class="empty-card err"><h3>Esta carpeta está dentro de otro repositorio</h3><p>Los comandos de git actuarían sobre <b>' + esc(st.parentRepo) + '</b>, no sobre esta carpeta.</p><p>Elige la carpeta raíz de ese repositorio, o crea uno propio aquí con ' + cmdBtn('git init') + '.</p></div>';
+      return '<div class="empty-card err"><h3>Esta carpeta está dentro de otro repositorio</h3><p>Los comandos de git actuarían sobre <b>' + esc(st.parentRepo) + '</b>, no sobre esta carpeta.</p><p>Elige la carpeta raíz de ese repositorio (✎ Editar proyecto), o crea uno propio aquí con ' + cmdBtn('git init') + '.</p></div>';
     }
     if (!st.isRepo) {
       return '<div class="empty-card"><h3>🌱 Esta carpeta todavía no es un repositorio de Git</h3>' +
@@ -301,7 +360,7 @@
       } else if (st.branch && !st.unborn) {
         p.push(pill('rama sin subir', 'warn', 'git push -u origin ' + st.branch, 'Esta rama no está enlazada con GitHub. Clic: pegar el comando para subirla'));
       }
-      if (S.remoteUrl && o && !sameRepo(st.origin, S.remoteUrl)) p.push(pill('⚠ origin no es el repositorio de arriba', 'warn', null, 'El origin de esta carpeta es ' + st.origin));
+      if (S.remoteUrl && o && !sameRepo(st.origin, S.remoteUrl)) p.push(pill('⚠ origin no es el GitHub de este proyecto', 'warn', null, 'El origin de esta carpeta es ' + st.origin));
     } else {
       p.push(pill('sin GitHub enlazado', 'warn', 'git remote add origin <url>', 'Esta carpeta no está enlazada con ningún repositorio de GitHub. Clic: pegar el comando para enlazarla'));
     }
@@ -336,6 +395,8 @@
     localView.render(st.commits, {
       currentBranch: st.branch,
       headSha: st.headSha,
+      youAreAt: st.unborn ? null : st.headSha,
+      youAreOn: st.branch || null,
       pushes: st.pushes,
       pending: { count: st.files.length, staged: st.counts.staged, conflicts: st.counts.conflicts },
     });
@@ -347,182 +408,71 @@
     if (seq !== localSeq) return S.local;
     S.local = st;
     renderLocal();
-    // Si cambian los push de esta carpeta (acabas de subir algo), se actualizan también las marcas del dibujo de GitHub.
+    // Si cambian los push o el punto donde estás (un commit nuevo, otra rama), se actualiza también el dibujo de GitHub.
     if (S.remote && S.remote.ok && !S.remote.empty && pushSig() !== S.remotePushSig) renderRemote();
-    updateLocalHint();
     return st;
   }
 
-  // ---------------------------------------------------------------- elegir repositorios (y enlazar uno con el otro)
-  async function selectRemote(url, o) {
-    const opts = o || {};
-    const r = await api.selectRepo(url);
-    if (r && r.data) S.data = r.data;
-    await showRemote(url, { fetch: true });
-    if (opts.pair !== false) await pairLocalForRemote(url);
+  // ---------------------------------------------------------------- elegir, cambiar y borrar proyectos
+  /** Pone en pantalla el proyecto activo: su GitHub arriba a la izquierda y su carpeta local a la derecha. */
+  async function applyProject() {
+    const p = curProject();
+    renderProjectBar();
+    const jobs = [];
+    if (p && p.url) jobs.push(showRemote(p.url, { fetch: true })); else clearRemote();
+    jobs.push(refreshLocal());
+    await Promise.all(jobs);
+    renderProjectInfo();
   }
 
-  async function selectLocal(dir, o) {
-    const opts = o || {};
-    const r = await api.selectLocal(dir);
-    if (r.error) { setHint($('local-hint'), r.error, 'err'); toast(r.error, true); return false; }
-    S.data = r.data;
-    S.cwd = r.cwd;
-    $('local-path').value = r.cwd || '';
-    fillLocalList();
-    await refreshLocal();
-    if (opts.pair !== false) await pairRemoteForLocal();
-    return true;
-  }
-
-  /** Al elegir un repositorio de GitHub, busca entre las carpetas guardadas la que esté enlazada con él. */
-  async function pairLocalForRemote(url) {
-    const r = await api.localOrigins();
-    if (!r || r.error) return;
-    const hit = r.list.find((x) => x.origin && sameRepo(x.origin, url));
-    if (!hit || sameDir(S.cwd, hit.path)) return;
-    const ok = await selectLocal(hit.path, { pair: false });
-    if (ok) toast('Carpeta local enlazada con este repositorio: ' + baseName(hit.path));
-  }
-
-  /** Al elegir una carpeta local, enseña arriba el repositorio de GitHub al que apunta su «origin». */
-  async function pairRemoteForLocal() {
-    const st = S.local;
-    if (!st || !st.origin) return;
-    const info = parse(st.origin);
-    if (!info) return;
-    const saved = S.data.repos.find((r) => sameRepo(r.url, info.url));
-    if (saved) {
-      if (!S.remoteUrl || !sameRepo(S.remoteUrl, saved.url)) await selectRemote(saved.url, { pair: false });
-    } else if (!S.remoteUrl) {
-      await showRemote(info.url, { fetch: true });
-    }
-  }
-
-  // ---------------------------------------------------------------- acciones de los botones (GitHub)
-  async function viewRemote() {
-    const v = $('remote-url').value.trim();
-    const info = parse(v);
-    if (!info) { updateRemoteHint(); toast('Esa dirección no es válida. Ejemplo: https://github.com/usuario/repositorio', true); return; }
-    const saved = S.data.repos.find((r) => sameRepo(r.url, info.url));
-    if (saved) await selectRemote(saved.url);
-    else {
-      const r = await api.selectRepo(null);
-      if (r && r.data) S.data = r.data;
-      await showRemote(info.url, { fetch: true });
-      await pairLocalForRemote(info.url);
-    }
-  }
-
-  async function saveRemote() {
-    const info = parse($('remote-url').value);
-    if (!info) { updateRemoteHint(); toast('Esa dirección no es válida. Ejemplo: https://github.com/usuario/repositorio', true); return; }
-    const r = await api.saveRepo(info.url);
+  async function selectProject(id) {
+    closeMenu();
+    const r = await api.selectProject(id || null);
     if (r.error) { toast(r.error, true); return; }
     S.data = r.data;
-    toast(r.already ? 'Ese repositorio ya estaba guardado: ' + info.label : '✔ Guardado: ' + info.label);
-    fillRemoteList();
-    await showRemote(info.url, { fetch: true });
-    await pairLocalForRemote(info.url);
+    S.cwd = r.cwd;
+    S.missingLocal = !!r.missingLocal;
+    await applyProject();
   }
 
-  async function deleteRemote() {
-    const info = parse($('remote-url').value);
-    const saved = info && S.data.repos.find((r) => sameRepo(r.url, info.url));
-    if (!saved) { toast('Ese repositorio no está en la lista guardada, no hay nada que borrar.', true); return; }
+  async function stepProject(delta) {
+    const list = S.data.projects;
+    if (!list.length) return;
+    const cur = curProject();
+    const i = cur ? list.indexOf(cur) : (delta > 0 ? -1 : 0);
+    await selectProject(list[(i + delta + list.length) % list.length].id);
+  }
+
+  async function deleteProject(id) {
+    const p = S.data.projects.find((x) => x.id === id);
+    if (!p) return;
+    closeMenu();
     const ok = await confirmBox({
-      title: 'Quitar de la lista',
-      html: '<p>¿Quitar <code>' + esc(info.label) + '</code> de la lista de repositorios guardados?</p><p class="safe">No se borra nada en GitHub ni en tu disco.</p>',
+      title: 'Quitar proyecto',
+      html: '<p>¿Quitar el proyecto <code>' + esc(p.name) + '</code> de la lista?</p>' +
+        '<p class="safe">No se borra nada en GitHub ni en tu ordenador: ni el repositorio ni la carpeta.</p>',
       ok: 'Quitar', danger: true,
     });
     if (!ok) return;
-    const idx = S.data.repos.indexOf(saved);
-    const r = await api.removeRepo(saved.url);
-    if (r.error) { toast(r.error, true); return; }
-    S.data = r.data;
-    toast('Quitado de la lista: ' + info.label);
-    const next = S.data.repos[Math.min(idx, S.data.repos.length - 1)];
-    if (next) await selectRemote(next.url); else clearRemote();
-  }
-
-  async function stepRemote(delta) {
-    const repos = S.data.repos;
-    if (!repos.length) return;
-    const cur = currentSavedRepo();
-    const i = cur ? repos.indexOf(cur) : (delta > 0 ? -1 : 0);
-    const next = repos[(i + delta + repos.length) % repos.length];
-    await selectRemote(next.url);
-  }
-
-  // ---------------------------------------------------------------- acciones de los botones (local)
-  async function openTypedLocal() {
-    const v = $('local-path').value.trim();
-    if (!v) { toast('Escribe la ruta de una carpeta o pulsa Examinar…', true); return; }
-    await selectLocal(v);
-  }
-
-  async function browseLocal() {
-    const r = await api.chooseLocal();
-    if (r.canceled) return;
+    const idx = S.data.projects.indexOf(p);
+    const wasSelected = p.id === S.data.selected.project;
+    const r = await api.removeProject(id);
     if (r.error) { toast(r.error, true); return; }
     S.data = r.data;
     S.cwd = r.cwd;
-    $('local-path').value = r.cwd || '';
-    fillLocalList();
-    await refreshLocal();
-    await pairRemoteForLocal();
-  }
-
-  async function saveLocal() {
-    const v = $('local-path').value.trim();
-    if (!v) { toast('Primero elige una carpeta (Examinar… o escribe su ruta).', true); return; }
-    const r = await api.saveLocal(v);
-    if (r.error) { setHint($('local-hint'), r.error, 'err'); toast(r.error, true); return; }
-    S.data = r.data;
-    S.cwd = r.cwd;
-    $('local-path').value = r.cwd;
-    toast(r.already ? 'Esa carpeta ya estaba guardada.' : '✔ Carpeta guardada: ' + baseName(r.dir));
-    fillLocalList();
-    await refreshLocal();
-    await pairRemoteForLocal();
-  }
-
-  async function deleteLocal() {
-    const v = $('local-path').value.trim().replace(/^"|"$/g, '');
-    const saved = v && S.data.locals.find((l) => sameDir(l.path, v));
-    if (!saved) { toast('Esa carpeta no está en la lista guardada, no hay nada que borrar.', true); return; }
-    const ok = await confirmBox({
-      title: 'Quitar de la lista',
-      html: '<p>¿Quitar la carpeta <code>' + esc(saved.path) + '</code> de la lista guardada?</p><p class="safe">Solo se quita de la lista: la carpeta y sus archivos no se tocan.</p>',
-      ok: 'Quitar', danger: true,
-    });
-    if (!ok) return;
-    const idx = S.data.locals.indexOf(saved);
-    const r = await api.removeLocal(saved.path);
-    if (r.error) { toast(r.error, true); return; }
-    S.data = r.data;
-    toast('Quitada de la lista: ' + baseName(saved.path));
-    const next = S.data.locals[Math.min(idx, S.data.locals.length - 1)];
-    if (next) await selectLocal(next.path);
-    else {
-      await selectLocal(null, { pair: false });
-      $('local-path').value = '';
-    }
-  }
-
-  async function stepLocal(delta) {
-    const locals = S.data.locals;
-    if (!locals.length) return;
-    const cur = currentSavedLocal();
-    const i = cur ? locals.indexOf(cur) : (delta > 0 ? -1 : 0);
-    await selectLocal(locals[(i + delta + locals.length) % locals.length].path);
+    toast('Proyecto quitado de la lista: ' + p.name);
+    if (!wasSelected) { renderProjectBar(); return; }
+    const next = S.data.projects[Math.min(idx, S.data.projects.length - 1)];
+    if (next) await selectProject(next.id);
+    else { S.missingLocal = false; await applyProject(); }
   }
 
   // ---------------------------------------------------------------- consola
   let nextId = 1;
   let currentRun = null;
+  const endWaiters = new Map(); // id del comando -> función que avisa de que ya llegó toda su salida
 
-  const WELCOME = '👋 <b>Bienvenido a GitHelper.</b> Esta consola trabaja en la carpeta de tu <b>repositorio local</b> (arriba a la derecha).<br>' +
+  const WELCOME = '👋 <b>Bienvenido a GitHelper.</b> Esta consola trabaja en la <b>carpeta local del proyecto activo</b> (arriba, en «Proyectos activos»).<br>' +
     '• Escribe aquí comandos <b>git</b> y <b>gh</b> y pulsa Enter. Al terminar, los dibujos de arriba se actualizan solos.<br>' +
     '• ¿No te acuerdas de un comando? Pulsa cualquiera de la <b>lista de la derecha</b>: se copia aquí y solo tienes que rellenar lo que va entre &lt; &gt;.<br>' +
     '• Para iniciar sesión en GitHub (<code>gh auth login</code>) usa el botón <b>⌨ Terminal externa</b>.';
@@ -550,8 +500,12 @@
       term.beginStream(id);
       term.setBusy(true);
       currentRun = id;
+      const ended = new Promise((resolve) => { endWaiters.set(id, resolve); });
       let r;
       try { r = await api.run(id, cmd.argv, cmd.redirect); } catch (e) { r = { code: 1, error: String(e) }; }
+      // Se espera al aviso de «terminado» (llega por el mismo canal que el texto, en orden); el plazo es solo por si algo fallara.
+      await Promise.race([ended, new Promise((resolve) => setTimeout(resolve, 3000))]);
+      endWaiters.delete(id);
       term.endStream(id);
       term.setBusy(false);
       currentRun = null;
@@ -616,6 +570,8 @@
     } catch { /* ignorar */ }
   }
 
+  const fitGraphs = () => { if (remoteView) remoteView.fit(); if (localView) localView.fit(); };
+
   function initSplitters() {
     const size = (id, axis) => $(id).getBoundingClientRect()[axis === 'x' ? 'width' : 'height'];
     // Para repartir con píxeles hay que fijar primero el tamaño actual de los dos paneles (flex-grow = su tamaño).
@@ -641,6 +597,7 @@
           document.removeEventListener('mouseup', up);
           document.body.classList.remove('dragging', 'dragging-h');
           saveLayout();
+          fitGraphs();
         };
         document.addEventListener('mousemove', move);
         document.addEventListener('mouseup', up);
@@ -690,41 +647,56 @@
     const obs = new MutationObserver(syncHeads);
     ['remote-strip', 'local-strip'].forEach((id) => obs.observe($(id), { childList: true, subtree: true, characterData: true }));
     window.addEventListener('resize', syncHeads);
+    window.addEventListener('resize', fitGraphs);
     document.addEventListener('mouseup', syncHeads);
     syncHeads();
-    // GitHub
-    $('btn-remote-view').addEventListener('click', viewRemote);
-    $('btn-remote-save').addEventListener('click', saveRemote);
-    $('btn-remote-del').addEventListener('click', deleteRemote);
-    $('btn-remote-prev').addEventListener('click', () => stepRemote(-1));
-    $('btn-remote-next').addEventListener('click', () => stepRemote(1));
+
+    // proyectos activos
+    $('project-btn').addEventListener('click', toggleMenu);
+    $('btn-project-new').addEventListener('click', () => openForm(null));
+    $('btn-project-prev').addEventListener('click', () => stepProject(-1));
+    $('btn-project-next').addEventListener('click', () => stepProject(1));
+    $('project-items').addEventListener('click', (e) => {
+      const row = e.target.closest('.pm-item');
+      if (!row) return;
+      const id = row.getAttribute('data-id');
+      if (e.target.closest('.pm-del')) deleteProject(id);
+      else if (e.target.closest('.pm-edit')) openForm(id);
+      else selectProject(id);
+    });
+    document.addEventListener('mousedown', (e) => {
+      if (!$('project-menu').hidden && !e.target.closest('.pm-wrap')) closeMenu();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return;
+      if (!$('pform').hidden) closeForm();
+      else if (!$('project-menu').hidden) closeMenu();
+    });
+    $('pform-card').addEventListener('submit', (e) => { e.preventDefault(); submitForm(); });
+    $('pf-cancel').addEventListener('click', closeForm);
+    $('pf-browse').addEventListener('click', async () => {
+      const r = await api.chooseFolder();
+      if (r && r.path) { $('pf-local').value = r.path; await suggestFromFolder(); }
+    });
+    $('pf-local').addEventListener('change', suggestFromFolder);
+    $('pform').addEventListener('mousedown', (e) => { if (e.target === $('pform')) closeForm(); });
+
+    // información del proyecto activo
     $('btn-remote-web').addEventListener('click', async () => {
-      const info = parse($('remote-url').value);
-      if (!info || !info.web) { toast('Escribe primero la dirección de un repositorio.', true); return; }
+      const p = curProject();
+      const info = p && p.url ? parse(p.url) : null;
+      if (!info || !info.web) { toast('Este proyecto no tiene dirección de GitHub.', true); return; }
       const r = await api.openExternal(info.web);
       if (r && r.error) toast(r.error, true);
     });
-    $('btn-remote-refresh').addEventListener('click', () => {
-      if (!S.remoteUrl) { toast('Primero elige un repositorio de GitHub.', true); return; }
-      showRemote(S.remoteUrl, { fetch: true });
-    });
-    $('remote-url').addEventListener('input', updateRemoteHint);
-    $('remote-url').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); viewRemote(); } });
-    $('remote-list').addEventListener('change', (e) => { if (e.target.value) selectRemote(e.target.value); });
-
-    // local
-    $('btn-local-browse').addEventListener('click', browseLocal);
-    $('btn-local-save').addEventListener('click', saveLocal);
-    $('btn-local-del').addEventListener('click', deleteLocal);
-    $('btn-local-prev').addEventListener('click', () => stepLocal(-1));
-    $('btn-local-next').addEventListener('click', () => stepLocal(1));
     $('btn-folder').addEventListener('click', async () => {
       const r = await api.openFolder();
       if (r && r.error) toast(r.error, true);
     });
-    $('local-path').addEventListener('input', updateLocalHint);
-    $('local-path').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); openTypedLocal(); } });
-    $('local-list').addEventListener('change', (e) => { if (e.target.value) selectLocal(e.target.value); });
+    $('btn-remote-refresh').addEventListener('click', () => {
+      if (!S.remoteUrl) { toast('El proyecto activo no tiene dirección de GitHub.', true); return; }
+      showRemote(S.remoteUrl, { fetch: true });
+    });
 
     // varios
     $('btn-terminal').addEventListener('click', async () => {
@@ -737,6 +709,7 @@
       if (c) insertCmd(c.getAttribute('data-cmd'));
     }));
     api.onTermData((d) => term.write(d.id, d.text));
+    api.onTermEnd((d) => { const f = endWaiters.get(d.id); if (f) f(); });
     api.onRepoChanged(() => { refreshLocal(); });
   }
 
@@ -768,22 +741,16 @@
     const r = await api.init();
     S.data = r.data;
     S.cwd = r.cwd;
+    S.missingLocal = !!r.missingLocal;
     S.e2e = !!r.e2e;
     S.version = r.version;
     S.gitAvailable = r.gitAvailable;
     S.ghAvailable = r.ghAvailable;
-    $('local-path').value = S.cwd || '';
-    fillRemoteList();
-    fillLocalList();
-    updateRemoteHint();
-    renderRemote();
-    await refreshLocal();
-    if (S.data.selected.repo) showRemote(S.data.selected.repo, { fetch: true });
-    else await pairRemoteForLocal();
+    await applyProject();
     if (!S.gitAvailable) term.error('No encuentro git.exe. Instala «Git for Windows» (git-scm.com/download/win) y vuelve a abrir GitHelper.');
     else if (!S.ghAvailable) term.note('Aviso: no encuentro «gh» (GitHub CLI). Los comandos «gh» no funcionarán hasta que lo instales (cli.github.com); con git ya puedes subir a GitHub.');
     term.focus();
-    window.__gh = { S, runLine, refreshLocal, showRemote, selectRemote, selectLocal, term, ready: true };
+    window.__gh = { S, runLine, refreshLocal, showRemote, selectProject, term, ready: true };
   }
 
   init();

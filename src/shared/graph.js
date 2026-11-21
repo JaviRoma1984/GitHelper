@@ -23,6 +23,7 @@
   const NODE_R = 9;
   const CHIP_H = 19;
   const CHIP_STEP = 22;
+  const HERE_PAD = 64; // sitio para la flecha de «Posición actual» (y su texto) bajo el commit donde se está
   const MAX_CHIPS = 6; // etiquetas apiladas sobre un mismo punto (rama, su copia en GitHub, develop, etiqueta de versión, HEAD…)
   const MAX_CHIP_CHARS = 13;
   const PALETTE = ['#58a6ff', '#f0883e', '#bc8cff', '#3fb950', '#ff7b72', '#e3b341', '#56d4dd', '#f778ba'];
@@ -327,6 +328,19 @@
       };
     }
 
+    // ---- «estás aquí»: el punto donde se está (una flecha que apunta hacia arriba, desde debajo del commit) ----
+    // opts.youAreAt = commit exacto donde se está (HEAD); opts.youAreOn = nombre de la rama en la que se está.
+    // Si el commit exacto no está en este dibujo (p. ej. aún no se ha subido a GitHub) se señala hasta dónde llega la rama (exact:false).
+    let here = null;
+    if (opts.youAreAt && nodeBySha.has(opts.youAreAt)) {
+      const nd = nodeBySha.get(opts.youAreAt);
+      here = { sha: nd.sha, x: nd.x, y: nd.y, lane: nd.lane, branch: opts.youAreOn || null, exact: true };
+    } else if (opts.youAreOn) {
+      const t = order.find((o) => o.name === opts.youAreOn);
+      const nd = t ? nodeBySha.get(t.sha) : null;
+      if (nd) here = { sha: nd.sha, x: nd.x, y: nd.y, lane: nd.lane, branch: opts.youAreOn, exact: false };
+    }
+
     const cols = total + (pending && !pending.ring ? 1 : 0);
     return {
       empty: false,
@@ -336,11 +350,12 @@
       rails,
       branchColors,
       pushMarks,
+      here,
       pending,
       lanes: laneCount,
       top,
       width: PAD_LEFT + (cols - 1) * COL_W + PAD_RIGHT,
-      height: top + (laneCount - 1) * LANE_H + 96,
+      height: top + (laneCount - 1) * LANE_H + 96 + (here ? HERE_PAD : 0), // la flecha de «Posición actual» empuja hacia abajo el texto de ese commit
       palette: PALETTE,
       headSha: head ? head.sha : null,
       trunkName: trunk ? trunk.name : null,
@@ -359,5 +374,5 @@
     return 'M' + x1 + ' ' + y1 + ' L' + (x2 - cw) + ' ' + y1 + ' C' + (x2 - cw * 0.45) + ' ' + y1 + ' ' + (x2 - cw * 0.55) + ' ' + y2 + ' ' + x2 + ' ' + y2;
   }
 
-  return { buildGraph, edgePath, colorFor, COL_W, LANE_H, PAD_LEFT, NODE_R, CHIP_H, CHIP_STEP, PALETTE };
+  return { buildGraph, edgePath, colorFor, HERE_PAD, COL_W, LANE_H, PAD_LEFT, NODE_R, CHIP_H, CHIP_STEP, PALETTE };
 });
