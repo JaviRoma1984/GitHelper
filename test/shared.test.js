@@ -276,6 +276,54 @@ test('graph: «estás aquí» señala el commit donde se está (y su rama) o, si
   assert.equal(exacto.height, sin.height + G.HERE_PAD);
 });
 
+test('graph: una rama fusionada SIN commit de fusión (fast-forward, rebase, squash) pierde su línea al infinito', () => {
+  // fast-forward: «x» apunta a un commit de la principal y git la da por fusionada
+  const ff = [
+    { sha: 'm3', parents: ['m2'], subject: 'tercero', refs: [{ type: 'branch', name: 'main', head: true }, { type: 'branch', name: 'x' }] },
+    { sha: 'm2', parents: ['m1'], subject: 'segundo', refs: [] },
+    { sha: 'm1', parents: [], subject: 'inicio', refs: [] },
+  ];
+  const abierta = G.buildGraph(ff, { currentBranch: 'main', headSha: 'm3' });
+  assert.ok(abierta.rails.some((r) => r.name === 'x'), 'sin saber que se fusionó, una rama sin commits propios se ve abierta');
+  const cerrada = G.buildGraph(ff, { currentBranch: 'main', headSha: 'm3', mergedBranches: ['x'], mergedTrunkSha: 'm3' });
+  assert.ok(!cerrada.rails.some((r) => r.name === 'x'), 'fusionada: sin línea larga');
+  assert.deepEqual(cerrada.mergedBranches, ['x']);
+  assert.ok(cerrada.nodes.find((n) => n.sha === 'm3').chips.some((c) => c.name === 'x'), 'pero su etiqueta sigue sobre el commit donde quedó');
+  assert.equal(cerrada.rails.length, 0);
+  // rebase / squash: «x» tiene sus propios commits, que no están en la historia de la principal
+  const real = [
+    { sha: 's3', parents: ['m2'], subject: 'squash de x', refs: [{ type: 'branch', name: 'main', head: true }] },
+    { sha: 'x2', parents: ['x1'], subject: 'x dos', refs: [{ type: 'branch', name: 'x' }] },
+    { sha: 'x1', parents: ['m1'], subject: 'x uno', refs: [] },
+    { sha: 'm2', parents: ['m1'], subject: 'segundo', refs: [] },
+    { sha: 'm1', parents: [], subject: 'inicio', refs: [] },
+  ];
+  assert.ok(G.buildGraph(real, { currentBranch: 'main' }).rails.some((r) => r.name === 'x'), 'sin saberlo, sigue abierta');
+  const sq = G.buildGraph(real, { currentBranch: 'main', mergedBranches: ['x'], mergedTrunkSha: 's3' });
+  assert.ok(!sq.rails.some((r) => r.name === 'x'));
+  assert.equal(sq.segments.find((s) => s.name === 'x').merged, true);
+  // se sigue viendo su recorrido: sale de la principal y avanza en su carril
+  const by = Object.fromEntries(sq.nodes.map((n) => [n.sha, n]));
+  assert.ok(by.x1.lane > 0 && by.x1.lane === by.x2.lane);
+  assert.ok(sq.edges.some((e) => e.kind === 'fork' && e.from === 'm1' && e.to === 'x1'));
+  // si la principal es OTRA punta (p. ej. GitHub aún no tiene la fusión), el dato local no se aplica
+  const otra = G.buildGraph(real, { currentBranch: 'main', mergedBranches: ['x'], mergedTrunkSha: 'otra-punta' });
+  assert.ok(otra.rails.some((r) => r.name === 'x'), 'no se cierra hasta que la principal sea la misma');
+  assert.equal(otra.segments.find((s) => s.name === 'x').merged, false);
+});
+
+test('graph: la fusión se reconoce aunque el commit del que salió la rama quede fuera de lo dibujado', () => {
+  const commits = [
+    { sha: 'M', parents: ['m2', 'x1'], subject: 'fusión de x', refs: [{ type: 'branch', name: 'main', head: true }] },
+    { sha: 'x1', parents: ['fuera-1'], subject: 'x uno', refs: [{ type: 'branch', name: 'x' }] },
+    { sha: 'm2', parents: ['fuera-2'], subject: 'segundo', refs: [] },
+  ];
+  const g = G.buildGraph(commits, { currentBranch: 'main', headSha: 'M' });
+  assert.equal(g.segments.find((s) => s.name === 'x').merged, true);
+  assert.ok(!g.rails.some((r) => r.name === 'x'));
+});
+
+
 test('graph: con muchas ramas (más que colores en la paleta) todas siguen teniendo un color distinto', () => {
   const commits = [];
   for (let i = 1; i <= 14; i++) commits.push({ sha: 'b' + i, parents: ['m1'], subject: 'rama ' + i, refs: [{ type: 'branch', name: 'rama' + String(i).padStart(2, '0') }] });

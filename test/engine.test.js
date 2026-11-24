@@ -304,3 +304,43 @@ test('almacén: los datos de la versión 1 (listas sueltas) se convierten en pro
   assert.ok(data.projects.some((p) => p.url === 'https://github.com/octo/solo-url' && !p.local), 'una dirección sin carpeta se queda solo con la dirección');
   assert.equal(new Set(data.projects.map((p) => p.name.toLowerCase())).size, data.projects.length, 'nombres únicos');
 });
+
+test('ramas fusionadas: se reconocen fast-forward, fusión con commit, rebase y squash; no las abiertas ni las recién creadas', { skip: !HAS_GIT }, async () => {
+  const commit = (cwd, f, m) => { fs.writeFileSync(path.join(cwd, f), m + '\n'); git(cwd, 'add', '.'); git(cwd, 'commit', '-qm', m); };
+  const x = (w, n) => { git(w, 'switch', '-qc', 'x'); for (let i = 1; i <= n; i++) commit(w, 'x' + i, 'x ' + i); git(w, 'switch', '-q', 'main'); };
+  const casos = {
+    abierta: { merged: false, hacer: (w) => { x(w, 1); } },
+    'recién creada, sin trabajo': { merged: false, hacer: (w) => { git(w, 'branch', 'x'); } },
+    'recién creada, y la principal avanza': { merged: false, hacer: (w) => { git(w, 'branch', 'x'); commit(w, 'm', 'main avanza'); } },
+    'fast-forward (lo normal si la principal no avanzó)': { merged: true, hacer: (w) => { x(w, 2); git(w, 'merge', '-q', 'x'); } },
+    'fast-forward y la principal sigue avanzando': { merged: true, hacer: (w) => { x(w, 1); git(w, 'merge', '-q', 'x'); commit(w, 'm', 'main sigue'); } },
+    'fusión con commit de fusión': { merged: true, hacer: (w) => { x(w, 1); git(w, 'merge', '-q', '--no-ff', 'x', '-m', 'fusion'); } },
+    'rebase / cherry-pick de un commit': { merged: true, hacer: (w) => { x(w, 1); commit(w, 'm', 'main avanza'); git(w, 'cherry-pick', 'x'); } },
+    'rebase / cherry-pick de dos commits': { merged: true, hacer: (w) => { x(w, 2); commit(w, 'm', 'main avanza'); git(w, 'cherry-pick', 'x~1', 'x'); } },
+    'squash de dos commits': { merged: true, hacer: (w) => { x(w, 2); git(w, 'merge', '-q', '--squash', 'x'); git(w, 'commit', '-qm', 'squash de x'); } },
+    'squash y después la principal avanza': { merged: true, hacer: (w) => { x(w, 2); git(w, 'merge', '-q', '--squash', 'x'); git(w, 'commit', '-qm', 'squash de x'); commit(w, 'm', 'main sigue'); } },
+    'con un cambio distinto en la principal (no es lo mismo)': { merged: false, hacer: (w) => { x(w, 1); commit(w, 'otro', 'otra cosa'); } },
+  };
+  let n = 0;
+  for (const [nombre, caso] of Object.entries(casos)) {
+    const w = path.join(tmp, 'fusionada-' + (++n));
+    fs.mkdirSync(w, { recursive: true });
+    git(w, 'init', '-q', '-b', 'main');
+    commit(w, 'a', 'inicio');
+    caso.hacer(w);
+    const st = await Git.getState(w);
+    const mainSha = git(w, 'rev-parse', 'main').trim();
+    assert.equal(st.mergedTrunkSha, mainSha, nombre + ': la punta de la principal con la que se calcula');
+    assert.equal(st.mergedBranches.includes('x'), caso.merged, nombre + ' → debía ' + (caso.merged ? '' : 'NO ') + 'darse por fusionada; sale: ' + JSON.stringify(st.mergedBranches));
+    assert.ok(!st.mergedBranches.includes('main'), 'la principal nunca cuenta como fusionada');
+  }
+  // sin rama principal con nombre conocido no se inventa nada
+  const sin = path.join(tmp, 'fusionada-sin-principal');
+  fs.mkdirSync(sin, { recursive: true });
+  git(sin, 'init', '-q', '-b', 'trabajo');
+  commit(sin, 'a', 'inicio');
+  git(sin, 'branch', 'otra');
+  const st2 = await Git.getState(sin);
+  assert.deepEqual(st2.mergedBranches, []);
+  assert.equal(st2.mergedTrunkSha, null);
+});

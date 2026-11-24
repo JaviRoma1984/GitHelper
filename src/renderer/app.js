@@ -208,10 +208,17 @@
     if (!st || !st.isRepo || !st.origin || !S.remoteUrl || !sameRepo(st.origin, S.remoteUrl)) return { at: null, on: null };
     return { at: st.unborn ? null : st.headSha, on: st.branch || null };
   }
-  // Firma de lo que depende de la carpeta local en el dibujo de GitHub: si cambia (un push nuevo, otra rama, otro commit), se vuelve a dibujar.
+  /** Ramas que git da por fusionadas (fast-forward, rebase…) según la carpeta local del proyecto. En GitHub solo se aplican cuando su principal es la misma punta (ya subida). */
+  function mergedForRemote() {
+    const st = S.local;
+    if (!st || !st.isRepo || !st.origin || !S.remoteUrl || !sameRepo(st.origin, S.remoteUrl)) return { branches: [], trunk: null };
+    return { branches: st.mergedBranches || [], trunk: st.mergedTrunkSha || null };
+  }
+  // Firma de lo que depende de la carpeta local en el dibujo de GitHub: si cambia (un push nuevo, otra rama, otro commit, una fusión), se vuelve a dibujar.
   const pushSig = () => {
     const h = hereForRemote();
-    return pushesForRemote().map((p) => p.ref + ':' + p.new + ':' + p.ts).join('|') + '#' + h.at + '#' + h.on;
+    const m = mergedForRemote();
+    return pushesForRemote().map((p) => p.ref + ':' + p.new + ':' + p.ts).join('|') + '#' + h.at + '#' + h.on + '#' + m.branches.join(',') + '#' + m.trunk;
   };
 
   function remoteEmptyHtml() {
@@ -268,7 +275,8 @@
     }
     S.remotePushSig = pushSig();
     const here = hereForRemote();
-    remoteView.render(r.commits, { currentBranch: r.defaultBranch, pushes: pushesForRemote(), youAreAt: here.at, youAreOn: here.on });
+    const merged = mergedForRemote();
+    remoteView.render(r.commits, { currentBranch: r.defaultBranch, pushes: pushesForRemote(), youAreAt: here.at, youAreOn: here.on, mergedBranches: merged.branches, mergedTrunkSha: merged.trunk });
     // Si la rama en la que estás aún no existe en GitHub, no hay dónde poner la flecha: se avisa en la franja.
     if (here.on && !(remoteView.model && remoteView.model.here)) {
       $('remote-strip').innerHTML += pill('tu rama «' + esc(here.on) + '» aún no está en GitHub', 'warn', 'git push -u origin ' + here.on, 'Estás en esa rama en tu carpeta local, pero todavía no la has subido. Clic: pegar el comando para subirla');
@@ -397,6 +405,8 @@
       headSha: st.headSha,
       youAreAt: st.unborn ? null : st.headSha,
       youAreOn: st.branch || null,
+      mergedBranches: st.mergedBranches,
+      mergedTrunkSha: st.mergedTrunkSha,
       pushes: st.pushes,
       pending: { count: st.files.length, staged: st.counts.staged, conflicts: st.counts.conflicts },
     });

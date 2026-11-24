@@ -119,12 +119,21 @@
     // Cada rama (distinta de main) es una línea larga como la de main. Si la rama tiene commits propios, es su tramo; si apunta a un commit
     // que ya pertenece a otra rama (p. ej. «develop» recién creada desde main, sin commits nuevos), tendría que quedarse sin línea: por eso
     // se le crea un tramo «virtual» anclado a ese commit, con su propio carril.
+    // Ramas que git ya da por fusionadas en la principal aunque no dejaran un commit de fusión (fast-forward, rebase, cherry-pick):
+    // vienen de fuera (opts.mergedBranches) y solo valen si la punta de la principal es la misma con la que se calcularon
+    // (así el dibujo de GitHub no cierra una rama hasta que la fusión también está subida).
+    const trustMerged = !opts.mergedTrunkSha || (!!order[0] && order[0].sha === opts.mergedTrunkSha);
+    const mergedSet = new Set(trustMerged ? (opts.mergedBranches || []) : []);
+    const closedNames = []; // ramas fusionadas sin tramo propio: solo se ve su etiqueta sobre el commit donde quedaron
     const virtualSegs = [];
     order.forEach((t, i) => {
       const seg = walk(t.sha, t.name);
       if (!t.local || i === 0) return;
       if (seg) seg.isBranch = true; // rama con commits propios (si sigue abierta, más abajo se le pone la línea larga)
-      else if (info.has(t.sha)) virtualSegs.push({ name: t.name, anchorSha: t.sha, virtual: true, nodes: [], lane: 0, colorIdx: 0, start: 0, end: 0 });
+      else if (info.has(t.sha)) {
+        if (mergedSet.has(t.name)) closedNames.push(t.name); // fusionada por fast-forward: su trabajo ya está en la línea de la principal
+        else virtualSegs.push({ name: t.name, anchorSha: t.sha, virtual: true, nodes: [], lane: 0, colorIdx: 0, start: 0, end: 0 });
+      }
     });
     // Commits a los que solo se llega por una fusión (ramas ya borradas).
     commits.forEach((c) => {
@@ -154,8 +163,12 @@
       if (!s.isBranch) return;
       const oldest = s.nodes[s.nodes.length - 1];
       const parent = oldest.c.parents[0] ? info.get(oldest.c.parents[0]) : null;
-      const parentSeg = parent ? parent.seg : null;
-      s.merged = !!(parentSeg && parentSeg !== s && ancestorsOf(parentSeg.nodes[0].sha).has(s.nodes[0].sha));
+      // la rama madre: la del commit del que salió (si ese commit queda fuera de lo dibujado, se toma la principal)
+      const parentSeg = parent ? parent.seg : trunkSeg;
+      const tip = s.nodes[0].sha;
+      // fusionada si su punta ya está en la historia de su madre o de la principal (fusión con commit), o si git la da por fusionada (mergedSet)
+      const byHistory = (parentSeg && parentSeg !== s && ancestorsOf(parentSeg.nodes[0].sha).has(tip)) || (s !== trunkSeg && ancestorsOf(trunkSeg.nodes[0].sha).has(tip));
+      s.merged = !!(byHistory || mergedSet.has(s.name));
       s.longLine = !s.merged;
     });
 
@@ -360,6 +373,7 @@
       headSha: head ? head.sha : null,
       trunkName: trunk ? trunk.name : null,
       segments: segs.map((s) => ({ name: s.name, lane: s.lane, size: s.nodes.length, merged: !!s.merged })),
+      mergedBranches: segs.filter((s) => s.merged && s.name).map((s) => s.name).concat(closedNames), // ramas dadas por fusionadas (sin línea al infinito)
     };
   }
 

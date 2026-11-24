@@ -44,10 +44,14 @@ function runProcess(exeName, args, opts) {
     if (!exe) { resolve({ code: 127, out: '', err: '', notFound: true }); return; }
     let child;
     try {
-      child = spawn(exe, args, { cwd: o.cwd, env: baseEnv(o.env), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      child = spawn(exe, args, { cwd: o.cwd, env: baseEnv(o.env), windowsHide: true, stdio: [o.input !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
     } catch (e) {
       resolve({ code: 126, out: '', err: String(e.message || e) });
       return;
+    }
+    if (o.input !== undefined) { // texto que se le pasa al programa por su entrada (p. ej. git patch-id)
+      child.stdin.on('error', () => { /* el programa pudo cerrar la entrada antes de leerlo todo */ });
+      child.stdin.end(o.input);
     }
     let out = '';
     let err = '';
@@ -138,6 +142,94 @@ async function readPushes(cwd) {
   return out.slice(0, 80);
 }
 
+/**
+ * Ramas locales en cuyo registro (reflog) consta que se hicieron commits EN ELLA. Sirve para distinguir una rama que ya se fusionó
+ * por fast-forward (tuvo trabajo y ahora apunta a un commit de la principal) de una rama recién creada sin trabajo (solo «branch: Created from…»).
+ */
+async function branchesWithOwnCommits(cwd) {
+  const gp = await git(cwd, ['rev-parse', '--git-path', 'logs/refs/heads']);
+  const out = new Set();
+  if (gp.code !== 0) return out;
+  const base = path.resolve(cwd, gp.out.trim());
+  const walk = (dir, rel) => {
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    entries.forEach((e) => {
+      const name = rel ? rel + '/' + e.name : e.name;
+      if (e.isDirectory()) { walk(path.join(dir, e.name), name); return; }
+      let text = '';
+      try { text = fs.readFileSync(path.join(dir, e.name), 'utf8'); } catch { return; }
+      if (text.split('\n').some((l) => /\t(commit|cherry-pick|rebase \(pick\))/.test(l))) out.add(name);
+    });
+  };
+  walk(base, '');
+  return out;
+}
+
+/** Los «códigos de parche» (git patch-id) de lo que sale de un git diff / git log -p: sirven para saber si dos cambios son el mismo aunque estén en commits distintos. */
+async function patchIds(cwd, gitArgs) {
+  const d = await git(cwd, gitArgs);
+  if (d.code !== 0 || !d.out.trim()) return [];
+  const p = await runProcess('git', ['patch-id', '--stable'], { cwd, input: d.out, timeoutMs: 20000 });
+  return p.code === 0 ? p.out.split('\n').map((l) => l.split(' ')[0]).filter(Boolean) : [];
+}
+
+const TRUNK_NAMES = ['main', 'master', 'trunk', 'develop'];
+const mergedCache = new Map(); // «carpeta|rama|punta|punta de la principal|¿con trabajo propio?» -> true/false (solo se recalcula si cambia algo)
+
+/**
+ * Qué ramas locales da git por fusionadas en la principal, aunque la fusión no dejara un commit de fusión:
+ *  - fast-forward (o fusión normal): su punta ya está en la historia de la principal Y tuvo commits propios (reflog);
+ *  - rebase / cherry-pick: todos sus commits ya están en la principal con otro código (git cherry marca «-»).
+ * Una fusión «squash» no deja rastro que git sepa leer: esa rama se sigue viendo como abierta.
+ * @returns {Promise<{trunk:string|null, trunkSha:string|null, merged:string[]}>}
+ */
+async function readMergedBranches(cwd, branches) {
+  const none = { trunk: null, trunkSha: null, merged: [] };
+  const trunk = TRUNK_NAMES.find((t) => branches.includes(t));
+  if (!trunk || branches.length < 2) return none;
+  const heads = await git(cwd, ['for-each-ref', '--format=%(objectname) %(refname:short)', 'refs/heads']);
+  if (heads.code !== 0) return none;
+  const shaOf = new Map();
+  heads.out.split('\n').forEach((l) => { const m = l.match(/^([0-9a-f]{40}) (.+)$/); if (m) shaOf.set(m[2], m[1]); });
+  const trunkSha = shaOf.get(trunk);
+  if (!trunkSha) return none;
+  const own = await branchesWithOwnCommits(cwd);
+  const others = Array.from(shaOf.entries()).filter(([n]) => n !== trunk).slice(0, 40);
+  const merged = [];
+  const check = async ([name, sha]) => {
+    const key = [cwd, name, sha, trunkSha, own.has(name)].join('|');
+    if (!mergedCache.has(key)) {
+      let result = false;
+      const anc = await git(cwd, ['merge-base', '--is-ancestor', sha, trunkSha]);
+      if (anc.code === 0) result = own.has(name);
+      else if (anc.code === 1) {
+        const ch = await git(cwd, ['cherry', trunk, sha]);
+        const lines = ch.code === 0 ? ch.out.split('\n').filter(Boolean) : [];
+        result = lines.length > 0 && lines.every((l) => l.startsWith('- '));
+        if (!result) {
+          // «squash»: todos los commits de la rama se juntaron en uno solo en la principal. Se compara el cambio total de la rama con el de cada commit
+          // que la principal ha ganado desde que la rama salió de ella (sin escribir nada en el repositorio).
+          const mb = await git(cwd, ['merge-base', trunk, sha]);
+          const base = mb.code === 0 ? mb.out.trim() : '';
+          if (base) {
+            const mine = await patchIds(cwd, ['diff', '--no-color', base, sha]);
+            if (mine.length === 1) {
+              const theirs = await patchIds(cwd, ['log', '-p', '--no-color', '--no-merges', '-n', '200', base + '..' + trunk]);
+              result = theirs.includes(mine[0]);
+            }
+          }
+        }
+      }
+      if (mergedCache.size > 2000) mergedCache.clear();
+      mergedCache.set(key, result);
+    }
+    if (mergedCache.get(key)) merged.push(name);
+  };
+  for (let i = 0; i < others.length; i += 6) await Promise.all(others.slice(i, i + 6).map(check)); // de 6 en 6, para no lanzar decenas de procesos a la vez
+  return { trunk, trunkSha, merged };
+}
+
 async function getState(cwd) {
   const state = {
     cwd: cwd || null,
@@ -167,6 +259,8 @@ async function getState(cwd) {
     remoteBranches: [],
     tags: [],
     pushes: [],
+    mergedBranches: [], // ramas que git da por fusionadas en la principal (fast-forward, rebase…)
+    mergedTrunkSha: null, // la punta de la principal con la que se calculó lo anterior
     limit: LOG_LIMIT,
     empty: false,
   };
@@ -222,8 +316,11 @@ async function getState(cwd) {
     const log = await git(cwd, ['log', '--branches', '--remotes', '--tags', 'HEAD', '--topo-order', '-n', String(LOG_LIMIT), '--decorate=full', '--format=' + GP.LOG_FORMAT]);
     if (log.code === 0) state.commits = GP.parseLog(log.out);
     state.pushes = await readPushes(cwd);
+    const mb = await readMergedBranches(cwd, state.branches);
+    state.mergedBranches = mb.merged;
+    state.mergedTrunkSha = mb.trunkSha;
   }
   return state;
 }
 
-module.exports = { runProcess, userGitArgs, getState, readPushes, baseEnv, parseRemotes, git, LOG_LIMIT };
+module.exports = { runProcess, userGitArgs, getState, readPushes, readMergedBranches, baseEnv, parseRemotes, git, LOG_LIMIT };

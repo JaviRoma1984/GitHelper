@@ -460,6 +460,18 @@ exports.run = async function run({ win, app, getCwd, getData, dataFile, cacheRoo
     check('el proyecto activo (Proyecto 1) sigue abierto con sus dos dibujos', (await label()) === 'Proyecto 1' && await settled(5, 5), await dbg());
     check('con un solo proyecto las flechas ‹ › se desactivan', (await $disabled('btn-project-prev')) && (await $disabled('btn-project-next')), '');
 
+    // ---------- 14b. Fusionar una rama con su rama madre: desaparece su línea al infinito ----------
+    const names = async (graphId) => (await railList(graphId)).map((r) => r.name).sort();
+    await run('git switch main && git merge prueba');
+    check('al fusionar «prueba» en main (fast-forward: Git no deja commit de fusión), el dibujo local le quita la línea al infinito', await waitFor(async () => JSON.stringify(await names('local-graph')) === JSON.stringify(['develop', 'main'])), JSON.stringify(await names('local-graph')));
+    check('su etiqueta sigue sobre el commit donde quedó y el dibujo no pierde commits', (await chips('local-graph')).includes('prueba') && (await nodes('local-graph')) === 5, JSON.stringify(await chips('local-graph')));
+    check('develop (recién creada, sin trabajo propio) sigue abierta', (await names('local-graph')).includes('develop'), '');
+    check('en GitHub todavía no: la fusión aún no está subida y esa línea sigue abierta', (await names('remote-graph')).includes('prueba'), JSON.stringify(await names('remote-graph')));
+    await run('git push');
+    check('al subir la fusión, GitHub también le quita la línea al infinito a «prueba»', await waitFor(async () => JSON.stringify(await names('remote-graph')) === JSON.stringify(['develop', 'main']), 20000), JSON.stringify(await names('remote-graph')));
+    check('y la flecha de «Posición actual» sigue en su sitio, ahora en el color de main', await waitFor(async () => { const h = await hereInfo('local-graph'); return h && h.count === 1 && h.color === mainRail.stroke; }), JSON.stringify(await hereInfo('local-graph')));
+    await shot('12b-rama-fusionada');
+
     // ---------- 15. Tamaño de los paneles ----------
     const before = await rect('remote-panel');
     const beforeLocal = await rect('local-panel');
