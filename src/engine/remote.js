@@ -9,7 +9,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { runProcess, git, LOG_LIMIT } = require('./git');
+const { runProcess, git, readMergedBranches, LOG_LIMIT } = require('./git');
 const { resolveExe } = require('./exe');
 const { removeDir } = require('./files');
 const GP = require('../shared/gitparse');
@@ -56,6 +56,37 @@ async function readCache(dir, res) {
   if (!res.branches.length) { res.empty = true; return; }
   const log = await git(dir, ['log', '--branches', '--tags', '--topo-order', '-n', String(LOG_LIMIT), '--decorate=full', '--format=' + GP.LOG_FORMAT]);
   if (log.code === 0) res.commits = GP.parseLog(log.out);
+  await readMerged(dir, res);
+}
+
+/**
+ * Qué ramas de GitHub ya están fusionadas en la principal, SIN depender de ninguna carpeta del usuario:
+ *  - rebase / cherry-pick / squash: se ve en el contenido de los commits (git cherry y git patch-id);
+ *  - fast-forward o fusión normal: la punta de la rama ya está en la historia de la principal. Para no confundirla con una rama recién creada
+ *    sin trabajo (develop recién sacada de main), solo cuenta si en alguna lectura anterior esa rama TUVO commits que la principal no tenía:
+ *    esa «memoria» se guarda junto a la copia (githelper-ramas.json).
+ * Una rama que ya estaba fusionada la primera vez que GitHelper la ve no se puede distinguir de una recién creada: se queda abierta.
+ */
+async function readMerged(dir, res) {
+  res.mergedBranches = [];
+  res.trunkSha = null;
+  if (!res.defaultBranch || !res.branches.includes(res.defaultBranch)) return;
+  const tip = await git(dir, ['rev-parse', 'refs/heads/' + res.defaultBranch]);
+  res.trunkSha = tip.code === 0 ? tip.out.trim() : null;
+  const memFile = path.join(dir, 'githelper-ramas.json');
+  let mem = {};
+  try { mem = JSON.parse(fs.readFileSync(memFile, 'utf8')) || {}; } catch { mem = {}; }
+  const ahead = new Set();
+  const mb = await readMergedBranches(dir, res.branches, {
+    trunk: res.defaultBranch,
+    env: QUIET_ENV, // la copia no trae el contenido de los archivos: si hace falta bajarlo para comparar, que sea en silencio (sin ventanas de inicio de sesión)
+    ownCommits: async () => new Set(Object.keys(mem).filter((n) => mem[n] && mem[n].ahead)),
+    onAhead: (n) => ahead.add(n),
+  });
+  res.mergedBranches = mb.merged;
+  const next = {};
+  res.branches.forEach((n) => { if (n !== res.defaultBranch && ((mem[n] && mem[n].ahead) || ahead.has(n))) next[n] = { ahead: true }; });
+  if (JSON.stringify(next) !== JSON.stringify(mem)) { try { fs.writeFileSync(memFile, JSON.stringify(next)); } catch { /* sin memoria: se sigue */ } }
 }
 
 async function doLoad(cacheRoot, url, opts) {
@@ -64,6 +95,7 @@ async function doLoad(cacheRoot, url, opts) {
   const res = {
     url, dir, ok: false, error: null, errorKind: null, stale: false, empty: false, cloned: false,
     commits: [], branches: [], tags: [], defaultBranch: null, fetchedAt: null, limit: LOG_LIMIT,
+    mergedBranches: [], trunkSha: null, // ramas ya fusionadas en la principal y punta de la principal (ver readMerged)
   };
   if (!resolveExe('git')) {
     res.error = 'No encuentro git.exe. Instala «Git for Windows» (https://git-scm.com/download/win) y vuelve a abrir GitHelper.';

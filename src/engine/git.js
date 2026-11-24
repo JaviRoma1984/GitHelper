@@ -166,65 +166,82 @@ async function branchesWithOwnCommits(cwd) {
   return out;
 }
 
-/** Los «códigos de parche» (git patch-id) de lo que sale de un git diff / git log -p: sirven para saber si dos cambios son el mismo aunque estén en commits distintos. */
-async function patchIds(cwd, gitArgs) {
-  const d = await git(cwd, gitArgs);
-  if (d.code !== 0 || !d.out.trim()) return [];
-  const p = await runProcess('git', ['patch-id', '--stable'], { cwd, input: d.out, timeoutMs: 20000 });
-  return p.code === 0 ? p.out.split('\n').map((l) => l.split(' ')[0]).filter(Boolean) : [];
+/** Los «códigos de parche» (git patch-id) de lo que sale de un git diff / git log -p: sirven para saber si dos cambios son el mismo aunque estén en commits distintos. null = no se pudo calcular. */
+async function patchIds(cwd, gitArgs, env) {
+  const d = await git(cwd, gitArgs, env);
+  if (d.code !== 0) return null;
+  if (!d.out.trim()) return [];
+  const p = await runProcess('git', ['patch-id', '--stable'], { cwd, env, input: d.out, timeoutMs: 20000 });
+  return p.code === 0 ? p.out.split('\n').map((l) => l.split(' ')[0]).filter(Boolean) : null;
 }
 
 const TRUNK_NAMES = ['main', 'master', 'trunk', 'develop'];
-const mergedCache = new Map(); // «carpeta|rama|punta|punta de la principal|¿con trabajo propio?» -> true/false (solo se recalcula si cambia algo)
+const mergedCache = new Map(); // «carpeta|rama|punta|punta de la principal|¿con trabajo propio?» -> { merged, ahead, until } (solo se recalcula si cambia algo)
 
 /**
- * Qué ramas locales da git por fusionadas en la principal, aunque la fusión no dejara un commit de fusión:
- *  - fast-forward (o fusión normal): su punta ya está en la historia de la principal Y tuvo commits propios (reflog);
- *  - rebase / cherry-pick: todos sus commits ya están en la principal con otro código (git cherry marca «-»).
- * Una fusión «squash» no deja rastro que git sepa leer: esa rama se sigue viendo como abierta.
+ * Qué ramas da git por fusionadas en la principal, aunque la fusión no dejara un commit de fusión:
+ *  - fast-forward (o fusión normal): su punta ya está en la historia de la principal Y tuvo commits propios (reflog, o lo que diga opts.ownCommits);
+ *  - rebase / cherry-pick: todos sus commits ya están en la principal con otro código (git cherry marca «-»);
+ *  - squash: el cambio total de la rama es el mismo (git patch-id) que el de un commit de la principal.
+ * Si algún paso no se puede calcular (p. ej. faltan datos y no hay conexión), la rama se da por abierta y se reintenta pasados unos minutos.
+ * @param {{trunk?:string, ownCommits?:()=>Promise<Set<string>>, onAhead?:(name:string)=>void, env?:object}} [opts]
+ *   trunk: la rama principal si se conoce (la de GitHub, por ejemplo); ownCommits: ramas de las que se sabe que tuvieron trabajo propio (por defecto, el reflog);
+ *   onAhead: se avisa de cada rama que tiene commits que la principal no tiene; env: variables extra para git (lectura silenciosa).
  * @returns {Promise<{trunk:string|null, trunkSha:string|null, merged:string[]}>}
  */
-async function readMergedBranches(cwd, branches) {
+async function readMergedBranches(cwd, branches, opts) {
+  const o = opts || {};
+  const g = (args) => git(cwd, args, o.env);
   const none = { trunk: null, trunkSha: null, merged: [] };
-  const trunk = TRUNK_NAMES.find((t) => branches.includes(t));
+  const trunk = o.trunk && branches.includes(o.trunk) ? o.trunk : TRUNK_NAMES.find((t) => branches.includes(t));
   if (!trunk || branches.length < 2) return none;
-  const heads = await git(cwd, ['for-each-ref', '--format=%(objectname) %(refname:short)', 'refs/heads']);
+  const heads = await g(['for-each-ref', '--format=%(objectname) %(refname:short)', 'refs/heads']);
   if (heads.code !== 0) return none;
   const shaOf = new Map();
   heads.out.split('\n').forEach((l) => { const m = l.match(/^([0-9a-f]{40}) (.+)$/); if (m) shaOf.set(m[2], m[1]); });
   const trunkSha = shaOf.get(trunk);
   if (!trunkSha) return none;
-  const own = await branchesWithOwnCommits(cwd);
+  const own = o.ownCommits ? await o.ownCommits() : await branchesWithOwnCommits(cwd);
   const others = Array.from(shaOf.entries()).filter(([n]) => n !== trunk).slice(0, 40);
   const merged = [];
   const check = async ([name, sha]) => {
     const key = [cwd, name, sha, trunkSha, own.has(name)].join('|');
-    if (!mergedCache.has(key)) {
+    let entry = mergedCache.get(key);
+    if (entry && entry.until && entry.until < Date.now()) entry = null; // un intento que no se pudo completar se repite pasado un rato
+    if (!entry) {
       let result = false;
-      const anc = await git(cwd, ['merge-base', '--is-ancestor', sha, trunkSha]);
+      let ahead = false;
+      let incomplete = false;
+      const anc = await g(['merge-base', '--is-ancestor', sha, trunkSha]);
       if (anc.code === 0) result = own.has(name);
       else if (anc.code === 1) {
-        const ch = await git(cwd, ['cherry', trunk, sha]);
+        ahead = true; // tiene commits que la principal no tiene (por ahora)
+        const ch = await g(['cherry', trunk, sha]);
+        if (ch.code !== 0) incomplete = true;
         const lines = ch.code === 0 ? ch.out.split('\n').filter(Boolean) : [];
         result = lines.length > 0 && lines.every((l) => l.startsWith('- '));
-        if (!result) {
+        if (!result && !incomplete) {
           // «squash»: todos los commits de la rama se juntaron en uno solo en la principal. Se compara el cambio total de la rama con el de cada commit
           // que la principal ha ganado desde que la rama salió de ella (sin escribir nada en el repositorio).
-          const mb = await git(cwd, ['merge-base', trunk, sha]);
+          const mb = await g(['merge-base', trunk, sha]);
           const base = mb.code === 0 ? mb.out.trim() : '';
           if (base) {
-            const mine = await patchIds(cwd, ['diff', '--no-color', base, sha]);
-            if (mine.length === 1) {
-              const theirs = await patchIds(cwd, ['log', '-p', '--no-color', '--no-merges', '-n', '200', base + '..' + trunk]);
-              result = theirs.includes(mine[0]);
+            const mine = await patchIds(cwd, ['diff', '--no-color', base, sha], o.env);
+            if (mine === null) incomplete = true;
+            else if (mine.length === 1) {
+              const theirs = await patchIds(cwd, ['log', '-p', '--no-color', '--no-merges', '-n', '200', base + '..' + trunk], o.env);
+              if (theirs === null) incomplete = true;
+              else result = theirs.includes(mine[0]);
             }
           }
         }
-      }
+      } else incomplete = true;
+      entry = { merged: result, ahead, until: incomplete ? Date.now() + 10 * 60 * 1000 : 0 };
       if (mergedCache.size > 2000) mergedCache.clear();
-      mergedCache.set(key, result);
+      mergedCache.set(key, entry);
     }
-    if (mergedCache.get(key)) merged.push(name);
+    if (entry.ahead && o.onAhead) o.onAhead(name);
+    if (entry.merged) merged.push(name);
   };
   for (let i = 0; i < others.length; i += 6) await Promise.all(others.slice(i, i + 6).map(check)); // de 6 en 6, para no lanzar decenas de procesos a la vez
   return { trunk, trunkSha, merged };

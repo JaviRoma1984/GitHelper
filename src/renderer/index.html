@@ -55,6 +55,11 @@
       <h2>☁ Ramas en GitHub</h2>
       <div id="remote-strip" class="strip"></div>
       <button id="btn-remote-refresh" class="btn small" title="Vuelve a leer GitHub ahora">↻ Actualizar</button>
+      <div class="zoombar" role="group" aria-label="Zoom del dibujo de GitHub">
+        <button id="zoom-remote-out" type="button" class="btn small" title="Alejar: el dibujo de GitHub se ve más pequeño (también Ctrl + rueda del ratón sobre él)">−</button>
+        <button id="zoom-remote-val" type="button" class="btn small zoom-val" title="Volver al 100 %">100 %</button>
+        <button id="zoom-remote-in" type="button" class="btn small" title="Acercar: el dibujo de GitHub se ve más grande (también Ctrl + rueda del ratón sobre él)">+</button>
+      </div>
     </div>
     <div class="gscroll" id="remote-scroll"><div class="graph" id="remote-graph"></div></div>
     <div class="legend" aria-hidden="true">
@@ -71,6 +76,11 @@
     <div class="panel-head">
       <h2>📁 Ramas en tu ordenador</h2>
       <div id="local-strip" class="strip"></div>
+      <div class="zoombar" role="group" aria-label="Zoom del dibujo de tu ordenador">
+        <button id="zoom-local-out" type="button" class="btn small" title="Alejar: el dibujo de tu ordenador se ve más pequeño (también Ctrl + rueda del ratón sobre él)">−</button>
+        <button id="zoom-local-val" type="button" class="btn small zoom-val" title="Volver al 100 %">100 %</button>
+        <button id="zoom-local-in" type="button" class="btn small" title="Acercar: el dibujo de tu ordenador se ve más grande (también Ctrl + rueda del ratón sobre él)">+</button>
+      </div>
     </div>
     <div class="gscroll" id="local-scroll"><div class="graph" id="local-graph"></div></div>
     <div class="legend" aria-hidden="true">

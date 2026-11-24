@@ -35,6 +35,18 @@
     return 'hsl(' + Math.round(((i * 137.508) + 20) % 360) + ' 68% 64%)';
   }
 
+  // Niveles de zoom de cada dibujo (1 = 100 %). Los botones − y + van de uno en uno.
+  const ZOOM_LEVELS = [0.4, 0.5, 0.65, 0.8, 1, 1.25, 1.5, 1.75, 2, 2.5];
+
+  /** El siguiente nivel de zoom a partir del actual (dir > 0 acerca, dir < 0 aleja, 0 se queda en el más cercano); nunca se sale de los límites. */
+  function nextZoom(z, dir) {
+    let idx = 0;
+    let best = Infinity;
+    ZOOM_LEVELS.forEach((l, k) => { const d = Math.abs(l - z); if (d < best) { best = d; idx = k; } });
+    const step = dir > 0 ? 1 : dir < 0 ? -1 : 0;
+    return ZOOM_LEVELS[Math.max(0, Math.min(ZOOM_LEVELS.length - 1, idx + step))];
+  }
+
   const short = (name) => (name.length > MAX_CHIP_CHARS ? name.slice(0, MAX_CHIP_CHARS - 1) + '…' : name);
 
   function chipsFor(commit) {
@@ -388,5 +400,5 @@
     return 'M' + x1 + ' ' + y1 + ' L' + (x2 - cw) + ' ' + y1 + ' C' + (x2 - cw * 0.45) + ' ' + y1 + ' ' + (x2 - cw * 0.55) + ' ' + y2 + ' ' + x2 + ' ' + y2;
   }
 
-  return { buildGraph, edgePath, colorFor, HERE_PAD, COL_W, LANE_H, PAD_LEFT, NODE_R, CHIP_H, CHIP_STEP, PALETTE };
+  return { buildGraph, edgePath, colorFor, nextZoom, ZOOM_LEVELS, HERE_PAD, COL_W, LANE_H, PAD_LEFT, NODE_R, CHIP_H, CHIP_STEP, PALETTE };
 });

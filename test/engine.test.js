@@ -344,3 +344,41 @@ test('ramas fusionadas: se reconocen fast-forward, fusión con commit, rebase y 
   assert.deepEqual(st2.mergedBranches, []);
   assert.equal(st2.mergedTrunkSha, null);
 });
+
+test('remoto: GitHelper reconoce por sí solo las ramas de GitHub ya fusionadas (sin ninguna carpeta local)', { skip: !HAS_GIT }, async () => {
+  const w = makeWorld('remoto-fusionadas');
+  const commit = (f, m) => { fs.writeFileSync(path.join(w.work, f), m + '\n'); git(w.work, 'add', '.'); git(w.work, 'commit', '-qm', m); };
+  const rama = (nombre, n) => { git(w.work, 'switch', '-qc', nombre, 'main'); for (let i = 1; i <= n; i++) commit(nombre + i, nombre + ' ' + i); git(w.work, 'switch', '-q', 'main'); };
+  rama('x', 1); // se fusionará por fast-forward
+  rama('s', 2); // se fusionará con squash
+  rama('r', 2); // se fusionará con rebase / cherry-pick
+  git(w.work, 'branch', 'fresca'); // recién creada, sin trabajo propio
+  git(w.work, 'push', '-q', 'origin', 'x', 's', 'r', 'fresca');
+
+  const a = await Remote.loadRemote(w.cache, w.origin, { urlOpts: OPTS });
+  assert.equal(a.ok, true, a.error);
+  assert.deepEqual(a.mergedBranches, [], 'nada fusionado todavía');
+  assert.equal(a.defaultBranch, 'main');
+  assert.equal(a.trunkSha, git(w.work, 'rev-parse', 'main').trim());
+  const mem = JSON.parse(fs.readFileSync(path.join(a.dir, 'githelper-ramas.json'), 'utf8'));
+  assert.deepEqual(Object.keys(mem).sort(), ['r', 's', 'x'], 'se recuerda qué ramas han tenido trabajo propio (fresca, no)');
+
+  // en GitHub se fusionan: x por fast-forward, s con squash y r con cherry-pick
+  git(w.work, 'merge', '-q', 'x');
+  git(w.work, 'merge', '-q', '--squash', 's');
+  git(w.work, 'commit', '-qm', 'squash de s');
+  git(w.work, 'cherry-pick', 'r~1', 'r');
+  git(w.work, 'push', '-q', 'origin', 'main');
+
+  const b = await Remote.loadRemote(w.cache, w.origin, { urlOpts: OPTS });
+  assert.equal(b.ok, true, b.error);
+  assert.deepEqual(b.mergedBranches.slice().sort(), ['r', 's', 'x'], 'x (la había visto con trabajo), s (squash) y r (cherry-pick)');
+  assert.ok(!b.mergedBranches.includes('fresca'), 'una rama recién creada sin trabajo sigue abierta');
+  assert.ok(!b.mergedBranches.includes('dev'), 'dev (fusión con commit de fusión) la cierra el dibujo por la historia, no esta lista');
+  assert.equal(b.trunkSha, git(w.work, 'rev-parse', 'main').trim());
+
+  // si GitHelper ve el repositorio por primera vez ya fusionado, solo se reconocen las fusiones que dejan huella en el contenido
+  const c = await Remote.loadRemote(path.join(w.base, 'cache-nuevo'), w.origin, { urlOpts: OPTS });
+  assert.deepEqual(c.mergedBranches.slice().sort(), ['r', 's'], 'x (fast-forward) ya fusionada la primera vez no se distingue de una recién creada');
+  assert.ok(!c.mergedBranches.includes('fresca'));
+});

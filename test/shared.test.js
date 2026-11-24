@@ -324,6 +324,24 @@ test('graph: la fusión se reconoce aunque el commit del que salió la rama qued
 });
 
 
+test('graph: el zoom sube y baja de nivel en nivel y nunca se sale de los límites', () => {
+  const L = G.ZOOM_LEVELS;
+  assert.ok(L.includes(1), 'existe el 100 %');
+  assert.ok(L.every((v, i) => i === 0 || v > L[i - 1]), 'niveles en orden');
+  assert.equal(G.nextZoom(1, 1), 1.25);
+  assert.equal(G.nextZoom(1, -1), 0.8);
+  assert.equal(G.nextZoom(1, 0), 1);
+  assert.equal(G.nextZoom(1.1, 1), 1.25, 'desde un valor intermedio parte del nivel más cercano');
+  assert.equal(G.nextZoom(L[L.length - 1], 1), L[L.length - 1], 'no pasa del máximo');
+  assert.equal(G.nextZoom(L[0], -1), L[0], 'no baja del mínimo');
+  let z = L[0];
+  const subida = [z];
+  for (let i = 0; i < L.length + 3; i++) { z = G.nextZoom(z, 1); subida.push(z); }
+  assert.deepEqual(subida.slice(0, L.length), L, 'sube pasando por todos los niveles');
+  assert.equal(subida[subida.length - 1], L[L.length - 1]);
+});
+
+
 test('graph: con muchas ramas (más que colores en la paleta) todas siguen teniendo un color distinto', () => {
   const commits = [];
   for (let i = 1; i <= 14; i++) commits.push({ sha: 'b' + i, parents: ['m1'], subject: 'rama ' + i, refs: [{ type: 'branch', name: 'rama' + String(i).padStart(2, '0') }] });

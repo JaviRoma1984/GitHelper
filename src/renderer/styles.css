@@ -147,6 +147,12 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   row-gap: 3px;
 }
 .panel-head .btn:last-child { margin-left: auto; }
+/* botones − 100 % + de cada dibujo: cada uno hace zoom solo en el suyo */
+.zoombar { display: flex; align-items: center; gap: 3px; margin-left: auto; flex: none; }
+.zoombar .btn { min-width: 30px; text-align: center; padding: 2px 8px; font-weight: 700; }
+.zoombar .zoom-val { min-width: 54px; font-weight: 600; font-size: 12px; font-variant-numeric: tabular-nums; }
+.zoombar .btn:disabled { opacity: .35; }
+.panel-head .zoombar .btn:last-child { margin-left: 0; }
 
 /* ---------- visualizadores ---------- */
 .strip { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; flex: 1 1 160px; min-width: 0; }

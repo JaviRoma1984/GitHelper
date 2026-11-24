@@ -40,8 +40,9 @@
   const HERE_PAD = G.HERE_PAD; // cuánto baja el texto del commit donde se está, para dejar sitio a la flecha y a su «Posición actual»
 
   /** viewW: ancho del dibujo (nunca menos que el del panel, para que la línea de main llegue hasta el borde derecho). */
-  function buildSvg(model, mode, viewW) {
+  function buildSvg(model, mode, viewW, zoom) {
     const W = Math.max(model.width, viewW || 0);
+    const z = zoom || 1; // el dibujo se calcula siempre a tamaño normal; el zoom solo cambia el tamaño con el que se pinta (viewBox)
     const nodes = new Map(model.nodes.map((n) => [n.sha, n]));
     const color = (i) => G.colorFor(i); // un color distinto por rama (más allá de la paleta fija se generan otros)
     // Las etiquetas de rama llevan el color de SU rama, aunque estén sobre un punto que pertenece a otra (p. ej. «develop» sobre un commit de main).
@@ -54,7 +55,7 @@
     };
     // La rama en la que se está: su línea se dibuja más gruesa.
     const isHereBranch = (name) => !!(model.here && model.here.branch && model.here.branch === name);
-    let s = '<svg xmlns="http://www.w3.org/2000/svg" width="' + W + '" height="' + model.height + '" viewBox="0 0 ' + W + ' ' + model.height + '">';
+    let s = '<svg xmlns="http://www.w3.org/2000/svg" width="' + (W * z) + '" height="' + (model.height * z) + '" viewBox="0 0 ' + W + ' ' + model.height + '">';
 
     for (let l = 0; l < model.lanes; l++) {
       const y = model.top + l * G.LANE_H;
@@ -223,6 +224,26 @@
       this.last = null;
       this.viewW = 0;
       this.lastKey = null;
+      // zoom propio de este dibujo (se recuerda en este ordenador)
+      this.zoomKey = 'githelper.zoom.' + o.mode;
+      this.zoom = 1;
+      try { const saved = parseFloat(localStorage.getItem(this.zoomKey)); if (saved >= G.ZOOM_LEVELS[0] && saved <= G.ZOOM_LEVELS[G.ZOOM_LEVELS.length - 1]) this.zoom = saved; } catch { /* sin almacenamiento */ }
+      this.controls = o.controls || null;
+      if (this.controls) {
+        this.controls.out.addEventListener('click', () => this.step(-1));
+        this.controls.inn.addEventListener('click', () => this.step(1));
+        this.controls.val.addEventListener('click', () => this.setZoom(1));
+        this.updateControls();
+      }
+      let wheelAt = 0;
+      this.scroller.addEventListener('wheel', (e) => { // Ctrl + rueda del ratón sobre el dibujo = zoom de ESTE dibujo
+        if (!e.ctrlKey) return;
+        e.preventDefault();
+        const now = Date.now();
+        if (now - wheelAt < 70) return;
+        wheelAt = now;
+        this.step(e.deltaY < 0 ? 1 : -1);
+      }, { passive: false });
       // Si cambia el ancho del panel (ventana o separador), se vuelve a dibujar para que la línea de main siga llegando hasta el borde.
       if (typeof ResizeObserver === 'function') {
         new ResizeObserver(() => this.fit()).observe(this.scroller);
@@ -245,12 +266,43 @@
       this.el.addEventListener('mouseout', (e) => { if (e.target.closest && e.target.closest('.g-push')) hideTip(); });
     }
 
+    /** Ancho (a tamaño normal) que tiene que cubrir el dibujo para llegar hasta el borde derecho del panel con el zoom actual. */
+    wanted() {
+      return Math.max(this.model ? this.model.width : 0, (this.scroller.clientWidth - 14) / this.zoom);
+    }
+
     /** Ajusta el ancho del dibujo al del panel (para que la línea de main llegue siempre hasta el borde derecho). */
     fit() {
       if (!this.last || !this.model) return;
-      const w = Math.max(this.model.width, this.scroller.clientWidth - 14);
-      if (Math.abs(w - this.viewW) > 2) this.render(this.last.commits, this.last.opts);
+      if (Math.abs(this.wanted() - this.viewW) > 2) this.render(this.last.commits, this.last.opts, { keepView: true });
     }
+
+    // ---- zoom del dibujo (botones − y +, clic en el porcentaje para volver al 100 %, o Ctrl + rueda del ratón) ----
+    updateControls() {
+      const c = this.controls;
+      if (!c) return;
+      c.val.textContent = Math.round(this.zoom * 100) + ' %';
+      c.out.disabled = this.zoom <= G.ZOOM_LEVELS[0];
+      c.inn.disabled = this.zoom >= G.ZOOM_LEVELS[G.ZOOM_LEVELS.length - 1];
+    }
+
+    /** Cambia el zoom manteniendo en el centro lo que se estaba mirando. */
+    setZoom(z) {
+      if (!(z > 0) || z === this.zoom) return;
+      const s = this.scroller;
+      const cx = (s.scrollLeft + s.clientWidth / 2) / this.zoom;
+      const cy = (s.scrollTop + s.clientHeight / 2) / this.zoom;
+      this.zoom = z;
+      try { localStorage.setItem(this.zoomKey, String(z)); } catch { /* sin almacenamiento: no pasa nada */ }
+      this.updateControls();
+      if (this.last && this.model) {
+        this.render(this.last.commits, this.last.opts, { keepView: true });
+        s.scrollLeft = Math.max(0, cx * z - s.clientWidth / 2);
+        s.scrollTop = Math.max(0, cy * z - s.clientHeight / 2);
+      }
+    }
+
+    step(dir) { this.setZoom(G.nextZoom(this.zoom, dir)); }
 
     /** Mensajes (vacío, cargando, error…) en lugar del dibujo. */
     showHtml(html) {
@@ -262,16 +314,17 @@
     }
 
     /** @param {object[]} commits  @param {{currentBranch?:string, headSha?:string, pending?:object}} opts */
-    render(commits, opts) {
+    render(commits, opts, o) {
       this.last = { commits, opts };
       const model = G.buildGraph(commits, opts || {});
       this.model = model;
       const prevLeft = this.scroller.scrollLeft;
       const prevTop = this.scroller.scrollTop;
-      this.viewW = Math.max(model.width, this.scroller.clientWidth - 14);
-      this.el.innerHTML = buildSvg(model, this.mode, this.viewW);
+      this.viewW = this.wanted();
+      this.el.innerHTML = buildSvg(model, this.mode, this.viewW, this.zoom);
       this.scroller.scrollLeft = prevLeft;
       this.scroller.scrollTop = prevTop;
+      if (o && o.keepView) return; // un cambio de zoom o de ancho no mueve lo que se está mirando
       // Si HEAD ha cambiado (nuevo commit, cambio de rama, otro repositorio), nos aseguramos de que se vea.
       const head = model.nodes.find((n) => n.sha === model.headSha) || model.nodes[0];
       const key = head ? head.sha : null;
@@ -281,17 +334,20 @@
 
     isVisible(node) {
       const s = this.scroller;
-      return node.x > s.scrollLeft + 50 && node.x < s.scrollLeft + s.clientWidth - 140 &&
-        node.y > s.scrollTop + 20 && node.y < s.scrollTop + s.clientHeight - 50;
+      const x = node.x * this.zoom;
+      const y = node.y * this.zoom;
+      return x > s.scrollLeft + 50 && x < s.scrollLeft + s.clientWidth - 140 &&
+        y > s.scrollTop + 20 && y < s.scrollTop + s.clientHeight - 50;
     }
 
     reveal(node, pending) {
       const s = this.scroller;
-      const targetX = (pending && !pending.ring ? pending.x : node.x);
+      const z = this.zoom;
+      const targetX = (pending && !pending.ring ? pending.x : node.x) * z;
       s.scrollLeft = Math.max(0, targetX - s.clientWidth * 0.65);
       // Se mira desde arriba (así main y las primeras ramas siguen a la vista) y solo se baja lo justo para ver el punto y su texto.
       const extra = this.model && this.model.here && this.model.here.sha === node.sha ? G.HERE_PAD : 0; // la flecha y su texto van debajo del commit
-      s.scrollTop = Math.max(0, node.y + 70 + extra - s.clientHeight);
+      s.scrollTop = Math.max(0, (node.y + 70 + extra) * z - s.clientHeight);
     }
   }
 

@@ -208,17 +208,23 @@
     if (!st || !st.isRepo || !st.origin || !S.remoteUrl || !sameRepo(st.origin, S.remoteUrl)) return { at: null, on: null };
     return { at: st.unborn ? null : st.headSha, on: st.branch || null };
   }
-  /** Ramas que git da por fusionadas (fast-forward, rebase…) según la carpeta local del proyecto. En GitHub solo se aplican cuando su principal es la misma punta (ya subida). */
+  /**
+   * Ramas de GitHub que ya están fusionadas en su principal: las que GitHelper deduce de los propios datos de GitHub (r.mergedBranches) y, además,
+   * las que la carpeta local del proyecto da por fusionadas, pero solo cuando la principal de GitHub es la misma punta que la local (fusión ya subida).
+   */
   function mergedForRemote() {
+    const r = S.remote;
+    const own = r && r.mergedBranches ? r.mergedBranches : [];
     const st = S.local;
-    if (!st || !st.isRepo || !st.origin || !S.remoteUrl || !sameRepo(st.origin, S.remoteUrl)) return { branches: [], trunk: null };
-    return { branches: st.mergedBranches || [], trunk: st.mergedTrunkSha || null };
+    const paired = st && st.isRepo && st.origin && S.remoteUrl && sameRepo(st.origin, S.remoteUrl);
+    const fromLocal = paired && st.mergedTrunkSha && r && r.trunkSha && st.mergedTrunkSha === r.trunkSha ? (st.mergedBranches || []) : [];
+    return Array.from(new Set(own.concat(fromLocal))).sort();
   }
   // Firma de lo que depende de la carpeta local en el dibujo de GitHub: si cambia (un push nuevo, otra rama, otro commit, una fusión), se vuelve a dibujar.
   const pushSig = () => {
     const h = hereForRemote();
     const m = mergedForRemote();
-    return pushesForRemote().map((p) => p.ref + ':' + p.new + ':' + p.ts).join('|') + '#' + h.at + '#' + h.on + '#' + m.branches.join(',') + '#' + m.trunk;
+    return pushesForRemote().map((p) => p.ref + ':' + p.new + ':' + p.ts).join('|') + '#' + h.at + '#' + h.on + '#' + m.join(',');
   };
 
   function remoteEmptyHtml() {
@@ -276,7 +282,7 @@
     S.remotePushSig = pushSig();
     const here = hereForRemote();
     const merged = mergedForRemote();
-    remoteView.render(r.commits, { currentBranch: r.defaultBranch, pushes: pushesForRemote(), youAreAt: here.at, youAreOn: here.on, mergedBranches: merged.branches, mergedTrunkSha: merged.trunk });
+    remoteView.render(r.commits, { currentBranch: r.defaultBranch, pushes: pushesForRemote(), youAreAt: here.at, youAreOn: here.on, mergedBranches: merged });
     // Si la rama en la que estás aún no existe en GitHub, no hay dónde poner la flecha: se avisa en la franja.
     if (here.on && !(remoteView.model && remoteView.model.here)) {
       $('remote-strip').innerHTML += pill('tu rama «' + esc(here.on) + '» aún no está en GitHub', 'warn', 'git push -u origin ' + here.on, 'Estás en esa rama en tu carpeta local, pero todavía no la has subido. Clic: pegar el comando para subirla');
@@ -741,8 +747,8 @@
       },
       onNode: (n) => { if (n) insertCmd('git show ' + n.short); },
     };
-    remoteView = new GH.GraphView({ el: $('remote-graph'), scroller: $('remote-scroll'), mode: 'remote', handlers });
-    localView = new GH.GraphView({ el: $('local-graph'), scroller: $('local-scroll'), mode: 'local', handlers });
+    remoteView = new GH.GraphView({ el: $('remote-graph'), scroller: $('remote-scroll'), mode: 'remote', handlers, controls: { out: $('zoom-remote-out'), val: $('zoom-remote-val'), inn: $('zoom-remote-in') } });
+    localView = new GH.GraphView({ el: $('local-graph'), scroller: $('local-scroll'), mode: 'local', handlers, controls: { out: $('zoom-local-out'), val: $('zoom-local-val'), inn: $('zoom-local-in') } });
     GH.CommandsView.init({ list: $('cmds-list'), search: $('cmd-search'), count: $('cmds-count'), onPick: insertCmd });
     initSplitters();
     wire();
@@ -760,7 +766,7 @@
     if (!S.gitAvailable) term.error('No encuentro git.exe. Instala «Git for Windows» (git-scm.com/download/win) y vuelve a abrir GitHelper.');
     else if (!S.ghAvailable) term.note('Aviso: no encuentro «gh» (GitHub CLI). Los comandos «gh» no funcionarán hasta que lo instales (cli.github.com); con git ya puedes subir a GitHub.');
     term.focus();
-    window.__gh = { S, runLine, refreshLocal, showRemote, selectProject, term, ready: true };
+    window.__gh = { S, runLine, refreshLocal, showRemote, selectProject, term, remoteView, localView, ready: true };
   }
 
   init();

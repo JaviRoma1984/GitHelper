@@ -472,6 +472,30 @@ exports.run = async function run({ win, app, getCwd, getData, dataFile, cacheRoo
     check('y la flecha de «Posición actual» sigue en su sitio, ahora en el color de main', await waitFor(async () => { const h = await hereInfo('local-graph'); return h && h.count === 1 && h.color === mainRail.stroke; }), JSON.stringify(await hereInfo('local-graph')));
     await shot('12b-rama-fusionada');
 
+    // ---------- 14c. GitHub por sí solo: una rama fusionada en GitHub pierde su línea sin necesitar ninguna carpeta local ----------
+    const sg = makeRepo('solo-github');
+    git(sg.work, 'switch', '-qc', 'feat');
+    fs.writeFileSync(path.join(sg.work, 'f.txt'), 'f\n');
+    git(sg.work, 'add', '.');
+    git(sg.work, 'commit', '-qm', 'Trabajo en feat');
+    git(sg.work, 'push', '-q', 'origin', 'feat');
+    git(sg.work, 'switch', '-q', 'main');
+    await createProject({ name: 'Solo GitHub', url: sg.bare });
+    check('un proyecto solo con GitHub dibuja su repositorio, sin carpeta local', await waitFor(async () => (await nodes('remote-graph')) === 5 && getCwd() === null), await dbg());
+    check('«feat» (con trabajo, sin fusionar) y «develop» (recién creada) están abiertas; dev, fusionada con commit, no', await waitFor(async () => JSON.stringify(await names('remote-graph')) === JSON.stringify(['develop', 'feat', 'main'])), JSON.stringify(await names('remote-graph')));
+    // en GitHub se fusiona «feat» en main (fast-forward) y se actualiza
+    git(sg.work, 'merge', '-q', 'feat');
+    git(sg.work, 'push', '-q', 'origin', 'main');
+    await $click('#btn-remote-refresh');
+    check('al fusionar «feat» en GitHub, su línea al infinito desaparece aunque no haya ninguna carpeta local', await waitFor(async () => JSON.stringify(await names('remote-graph')) === JSON.stringify(['develop', 'main']), 20000), JSON.stringify(await names('remote-graph')) + ' | ' + await dbg());
+    check('su etiqueta sigue sobre el commit donde quedó y «develop», sin trabajo propio, sigue abierta', (await chips('remote-graph')).includes('feat') && (await names('remote-graph')).includes('develop') && (await nodes('remote-graph')) === 5, JSON.stringify(await chips('remote-graph')));
+    await shot('12c-github-fusionada');
+    await openMenu();
+    await rowAct('Solo GitHub', '.pm-del');
+    await $click('#modal-ok');
+    check('y el proyecto de prueba se quita sin tocar nada', await waitFor(async () => projects().length === 1 && !projects().some((p) => p.name === 'Solo GitHub')) && fs.existsSync(sg.bare), JSON.stringify(projects().map((p) => p.name)));
+    await settled(5, 5);
+
     // ---------- 15. Tamaño de los paneles ----------
     const before = await rect('remote-panel');
     const beforeLocal = await rect('local-panel');
@@ -498,6 +522,38 @@ exports.run = async function run({ win, app, getCwd, getData, dataFile, cacheRoo
     await sleep(200);
     check('arrastrar el separador de abajo cambia el alto de los visualizadores', (await rect('graphs')).h < before.h - 30, JSON.stringify({ antes: before.h, ahora: (await rect('graphs')).h }));
 
+    // ---------- 15b. Zoom de cada dibujo: − y + en cada uno ----------
+    const zinfo = (graphId, side) => exec(`(() => { const svg = document.querySelector('#${graphId} svg'); const vb = svg.viewBox.baseVal;
+      return { label: document.getElementById('zoom-${side}-val').textContent, w: parseFloat(svg.getAttribute('width')), h: parseFloat(svg.getAttribute('height')), vw: vb.width, vh: vb.height,
+        out: document.getElementById('zoom-${side}-out').disabled, inn: document.getElementById('zoom-${side}-in').disabled, panel: document.getElementById('${graphId.replace('graph', 'scroll')}').clientWidth }; })()`);
+    const zoomOf = async () => ({ r: await zinfo('remote-graph', 'remote'), l: await zinfo('local-graph', 'local') });
+    const ratio = (z) => z.h / z.vh;
+    let zz = await zoomOf();
+    check('cada dibujo tiene sus botones − y + y arranca al 100 %', zz.r.label === '100 %' && zz.l.label === '100 %' && Math.abs(ratio(zz.r) - 1) < 0.01 && Math.abs(ratio(zz.l) - 1) < 0.01, JSON.stringify(zz));
+    await $click('#zoom-remote-in');
+    zz = await zoomOf();
+    check('+ en el dibujo de GitHub lo agranda (125 %) sin tocar el de tu ordenador', zz.r.label === '125 %' && Math.abs(ratio(zz.r) - 1.25) < 0.01 && zz.l.label === '100 %' && Math.abs(ratio(zz.l) - 1) < 0.01, JSON.stringify(zz));
+    await $click('#zoom-local-out');
+    await $click('#zoom-local-out');
+    zz = await zoomOf();
+    check('− en el dibujo de tu ordenador lo reduce (65 %) sin tocar el de GitHub', zz.l.label === '65 %' && Math.abs(ratio(zz.l) - 0.65) < 0.01 && zz.r.label === '125 %' && Math.abs(ratio(zz.r) - 1.25) < 0.01, JSON.stringify(zz));
+    check('con zoom, la línea de main sigue llegando hasta el borde derecho de cada panel', zz.r.w >= zz.r.panel - 16 && zz.l.w >= zz.l.panel - 16, JSON.stringify({ r: [zz.r.w, zz.r.panel], l: [zz.l.w, zz.l.panel] }));
+    await exec(`document.getElementById('remote-scroll').dispatchEvent(new WheelEvent('wheel', {deltaY: -100, ctrlKey: true, bubbles: true, cancelable: true}))`);
+    zz = await zoomOf();
+    check('Ctrl + rueda del ratón sobre un dibujo también hace zoom en ese dibujo (150 %)', zz.r.label === '150 %' && zz.l.label === '65 %', JSON.stringify(zz));
+    await sleep(120);
+    await exec(`document.getElementById('remote-scroll').dispatchEvent(new WheelEvent('wheel', {deltaY: 100, bubbles: true, cancelable: true}))`);
+    check('la rueda sin Ctrl no cambia el zoom (sirve para desplazarse)', (await zoomOf()).r.label === '150 %', JSON.stringify(await zoomOf()));
+    for (let i = 0; i < 8; i++) await $click('#zoom-local-out');
+    zz = await zoomOf();
+    check('al llegar al mínimo (40 %) el botón − se desactiva', zz.l.label === '40 %' && zz.l.out === true && zz.l.inn === false, JSON.stringify(zz.l));
+    await $click('#zoom-local-val');
+    zz = await zoomOf();
+    check('pulsar el porcentaje vuelve al 100 %', zz.l.label === '100 %' && Math.abs(ratio(zz.l) - 1) < 0.01, JSON.stringify(zz.l));
+    await $click('#zoom-local-out');
+    await $click('#zoom-local-out');
+    await shot('15b-zoom');
+
     // lo que debe encontrar el escenario «reabrir»: queda un proyecto (Proyecto 1) y se agrega otro para la prueba sin conexión
     await createProject({ name: 'Proyecto dos', url: p2.bare, local: p2.work });
     await settled(7, 7);
@@ -515,6 +571,7 @@ exports.run = async function run({ win, app, getCwd, getData, dataFile, cacheRoo
     check('la consola trabaja en la carpeta de ese proyecto', await (async () => { await run('pwd'); return (await consoleText()).toLowerCase().includes(p2.work.toLowerCase()); })(), '');
     check('el desplegable lista los proyectos guardados', (await rows()).length === 2, JSON.stringify(await rows()));
     check('el programa recuerda el tamaño de los paneles', (await rect('remote-panel')).h > 150, '');
+    check('y el zoom de cada dibujo (GitHub al 150 %, tu ordenador al 65 %)', (await $text('#zoom-remote-val')) === '150 %' && (await $text('#zoom-local-val')) === '65 %' && await exec(`(() => { const a = document.querySelector('#remote-graph svg'); const b = document.querySelector('#local-graph svg'); return Math.abs(parseFloat(a.getAttribute('height')) / a.viewBox.baseVal.height - 1.5) < 0.01 && Math.abs(parseFloat(b.getAttribute('height')) / b.viewBox.baseVal.height - 0.65) < 0.01; })()`), (await $text('#zoom-remote-val')) + ' | ' + (await $text('#zoom-local-val')));
     await shot('14-reabierto');
     await pick('Proyecto 1');
     check('cambiar al otro proyecto sigue funcionando tras reabrir', await settled(5, 5), await dbg());
